@@ -1,0 +1,32 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: browser-controller
+rules:
+- apiGroups:
+  - selenosis.io
+  resources:
+  - browsers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - selenosis.io
+  resources:
+  - browsers/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - selenosis.io
+  resources:
+  - browsers/status
+  verbs:
+  - get
+  - patch
+  - update
