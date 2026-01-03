@@ -11,7 +11,6 @@ require (
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
@@ -65,6 +64,5 @@ require (
 require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/rs/zerolog v1.34.0
-	github.com/tebeka/selenium v0.9.9
 	sigs.k8s.io/controller-runtime v0.20.4
 )
