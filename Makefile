@@ -18,7 +18,7 @@ INFORMER_GEN := $(shell which informer-gen)
 BINARY_NAME := manager
 DOCKER_REGISTRY ?= ${REGISTRY}
 IMAGE_NAME := $(DOCKER_REGISTRY)/selenosis-controller
-IMAGE_TAG ?= v1.0.1
+IMAGE_TAG ?= v0.0.1
 IMG := $(IMAGE_NAME):$(IMAGE_TAG)
 PLATFORM ?= linux/amd64
 
