@@ -16,7 +16,7 @@ LISTER_GEN := $(shell which lister-gen)
 INFORMER_GEN := $(shell which informer-gen)
 
 BINARY_NAME := manager
-DOCKER_REGISTRY ?= 192.168.1.101:30000
+DOCKER_REGISTRY ?= ${REGISTRY}
 IMAGE_NAME := $(DOCKER_REGISTRY)/selenosis-controller
 IMAGE_TAG ?= v1.0.1
 IMG := $(IMAGE_NAME):$(IMAGE_TAG)

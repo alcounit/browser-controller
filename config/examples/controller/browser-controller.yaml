@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: browser-controller
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      role: browser-controller
+  template:
+    metadata:
+      labels:
+        role: browser-controller
+    spec:
+      serviceAccountName: browser-controller
+      containers:
+      - name: manager
+        image: alcounit/browser-controller:v1.0.1
+        ports:
+        - containerPort: 8080
+          name: http
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 100m
+            memory: 64Mi
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+
