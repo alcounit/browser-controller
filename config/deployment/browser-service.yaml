@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: browser-service
+  labels:
+    role: browser-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      role: browser-service
+  template:
+    metadata:
+      labels:
+        role: browser-service
+    spec:
+      serviceAccountName: browser-service
+      containers:
+      - name: service
+        image: alcounit/browser-service:v0.0.1
+        imagePullPolicy: Always
+        args:
+          - "--listen=:8080"
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: browser-service
+  labels:
+    role: browser-service
+spec:
+  type: NodePort
+  selector:
+    role: browser-service
+  ports:
+  - name: http
+    port: 8080       
+    targetPort: 8080
