@@ -765,6 +765,9 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 
 	// Pod-level fields
 	if cfg.Labels != nil {
+		if pod.Labels == nil {
+			pod.Labels = map[string]string{}
+		}
 		for k, v := range *cfg.Labels {
 			pod.Labels[k] = v
 		}
@@ -780,6 +783,9 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 	}
 
 	if cfg.Annotations != nil {
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
 		for k, v := range *cfg.Annotations {
 			pod.Annotations[k] = v
 		}
