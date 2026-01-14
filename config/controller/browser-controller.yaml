@@ -16,7 +16,8 @@ spec:
       serviceAccountName: browser-controller
       containers:
       - name: manager
-        image: alcounit/browser-controller:v0.0.1
+        image: alcounit/browser-controller:latest
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8080
           name: http

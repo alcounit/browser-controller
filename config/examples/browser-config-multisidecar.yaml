@@ -1,7 +1,7 @@
 apiVersion: selenosis.io/v1
 kind: BrowserConfig
 metadata:
-  name: chrome-config
+  name: chrome-config-multisidecar
 spec:
   template:
     labels:
@@ -28,17 +28,8 @@ spec:
 
     sidecars:
     - name: seleniferous
-      image: "alcounit/seleniferous:v2.0.0"
+      image: "alcounit/seleniferous:latest"
       env:
-      - name: ROUTING_RULES
-        value: |
-          [
-            {
-              "pathRegex": "^/selenosis/v1/sessions/(?P<sessionId>[^/]+)/proxy/http/fileserver.*$",
-              "target": "127.0.0.1:9001",
-              "rewritePath": "/fileserver"
-            }
-          ]
       - name: SESSION_CREATE_TIMEOUT
         value: "10m"
       - name: SESSION_IDLE_TIMEOUT

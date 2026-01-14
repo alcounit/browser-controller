@@ -36,7 +36,6 @@ var (
 	AddToScheme = SchemeBuilder.AddToScheme
 )
 
-// Resource возвращает GroupResource для ресурса
 func Resource(resource string) schema.GroupResource {
 	return SchemeGroupVersion.WithResource(resource).GroupResource()
 }

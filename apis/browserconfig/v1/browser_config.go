@@ -371,7 +371,6 @@ func mergeSidecarPtr(template, override *[]Sidecar) *[]Sidecar {
 		return &cp
 	}
 
-	// карта для быстрого поиска
 	result := append([]Sidecar{}, *override...)
 	overrideNames := map[string]struct{}{}
 	for _, s := range *override {
@@ -390,7 +389,6 @@ func mergeVolumeMountsPtr(template, override *[]corev1.VolumeMount) *[]corev1.Vo
 
 	if template != nil {
 		for _, t := range *template {
-			// DeepCopy потому что внутри VolumeMount есть поля-указатели
 			copy := t.DeepCopy()
 			result = append(result, *copy)
 		}
