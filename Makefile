@@ -25,7 +25,7 @@ EXTRA_TAGS ?=
 PLATFORM ?= linux/amd64
 CONTAINER_TOOL ?= docker
 
-.PHONY: all generate deepcopy client lister informer manifests install-tools verify clean fmt vet tidy docker-build docker-push deploy install help show-vars
+.PHONY: all generate deepcopy client lister informer manifests install-tools verify clean fmt vet tidy test docker-build docker-push deploy install help show-vars
 
 all: generate manifests
 
@@ -43,6 +43,9 @@ vet:
 
 tidy:
 	go mod tidy
+
+test:
+	go test -race -count=1 -cover ./...
 
 deepcopy:
 	@$(CONTROLLER_GEN) \
@@ -87,7 +90,7 @@ manifests:
 verify:
 	@git diff --exit-code || (echo "Generated code is out of date. Run 'make generate'." && exit 1)
 
-docker-build: manifests generate tidy fmt vet
+docker-build: manifests generate tidy fmt vet test
 	$(CONTAINER_TOOL) buildx build \
 		--platform $(PLATFORM) \
 		-t $(IMAGE_NAME):$(VERSION) \
