@@ -2,13 +2,12 @@ MODULE := github.com/alcounit/browser-controller
 APIS_PKG := apis
 GROUP := selenosis
 BROWSER := browser
-VERSION := v1
+API_VERSION := v1
 BOILERPLATE := hack/boilerplate.go.txt
 
 PROJECT_PKG := $(MODULE)/pkg
 LISTER_PKG := $(MODULE)/pkg/listers
 INFORMER_PKG := $(MODULE)/pkg/informers
-API_DIR := $(APIS_PKG)/$(GROUP)/$(VERSION)
 
 CONTROLLER_GEN := $(shell which controller-gen)
 CLIENT_GEN := $(shell which client-gen)
@@ -58,7 +57,7 @@ client:
 	@$(CLIENT_GEN) \
 		--clientset-name clientset \
 		--input-base "$(MODULE)/apis" \
-		--input $(BROWSER)/$(VERSION) \
+		--input $(BROWSER)/$(API_VERSION) \
 		--output-pkg $(PROJECT_PKG) \
 		--output-dir ./pkg \
 		--go-header-file $(BOILERPLATE)
@@ -68,7 +67,7 @@ lister:
   		--output-pkg $(LISTER_PKG) \
   		--output-dir ./pkg/listers \
   		--go-header-file $(BOILERPLATE) \
-  		$(MODULE)/$(APIS_PKG)/$(BROWSER)/$(VERSION)
+  		$(MODULE)/$(APIS_PKG)/$(BROWSER)/$(API_VERSION)
 
 informer:
 	@$(INFORMER_GEN) \
@@ -77,7 +76,7 @@ informer:
 		--output-pkg $(INFORMER_PKG) \
 		--output-dir ./pkg/informers \
 		--go-header-file $(BOILERPLATE) \
-		$(MODULE)/$(APIS_PKG)/$(BROWSER)/$(VERSION)
+		$(MODULE)/$(APIS_PKG)/$(BROWSER)/$(API_VERSION)
 
 manifests:
 	@$(CONTROLLER_GEN) \
