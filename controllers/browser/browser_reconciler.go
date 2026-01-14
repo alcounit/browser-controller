@@ -754,13 +754,41 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 
 	pod.Spec.Containers = sidecarContainers
 
+	if browser.Labels != nil {
+		if pod.Labels == nil {
+			pod.Labels = map[string]string{}
+		}
+		for k, v := range browser.Labels {
+			pod.Labels[k] = v
+		}
+	}
+
 	// Pod-level fields
 	if cfg.Labels != nil {
-		pod.Labels = *cfg.Labels
+		if pod.Labels == nil {
+			pod.Labels = map[string]string{}
+		}
+		for k, v := range *cfg.Labels {
+			pod.Labels[k] = v
+		}
+	}
+
+	if browser.Annotations != nil {
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		for k, v := range browser.Annotations {
+			pod.Annotations[k] = v
+		}
 	}
 
 	if cfg.Annotations != nil {
-		pod.Annotations = *cfg.Annotations
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		for k, v := range *cfg.Annotations {
+			pod.Annotations[k] = v
+		}
 	}
 
 	if cfg.NodeSelector != nil {

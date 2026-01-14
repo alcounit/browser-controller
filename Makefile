@@ -15,13 +15,14 @@ CLIENT_GEN := $(shell which client-gen)
 LISTER_GEN := $(shell which lister-gen)
 INFORMER_GEN := $(shell which informer-gen)
 
-BINARY_NAME := manager
-DOCKER_REGISTRY ?= 192.168.1.101:30000
-IMAGE_NAME := $(DOCKER_REGISTRY)/selenosis-controller
-IMAGE_TAG ?= v1.0.1
-IMG := $(IMAGE_NAME):$(IMAGE_TAG)
-PLATFORM ?= linux/amd64
+BINARY_NAME := browser-controller
 
+REGISTRY ?= localhost:5000
+IMAGE_NAME := $(REGISTRY)/$(BINARY_NAME)
+
+VERSION ?= develop
+EXTRA_TAGS ?=
+PLATFORM ?= linux/amd64
 CONTAINER_TOOL ?= docker
 
 .PHONY: all generate deepcopy client lister informer manifests install-tools verify clean fmt vet tidy docker-build docker-push deploy install help show-vars
@@ -86,26 +87,31 @@ manifests:
 verify:
 	@git diff --exit-code || (echo "Generated code is out of date. Run 'make generate'." && exit 1)
 
-clean:
-	@rm -rf pkg/clientset pkg/listers pkg/informers
-	@find $(APIS_PKG) -name 'zz_generated.deepcopy.go' -delete
-	$(CONTAINER_TOOL) rmi $(IMG) 2>/dev/null || true
-
 docker-build: manifests generate tidy fmt vet
-	$(CONTAINER_TOOL) build --platform $(PLATFORM) -t $(IMG) .
+	$(CONTAINER_TOOL) buildx build \
+		--platform $(PLATFORM) \
+		-t $(IMAGE_NAME):$(VERSION) \
+		--load \
+		.
 
-docker-push:
-	$(CONTAINER_TOOL) push $(IMG)
+docker-push: manifests generate tidy fmt vet
+	$(CONTAINER_TOOL) buildx build \
+		--platform $(PLATFORM) \
+		-t $(IMAGE_NAME):$(VERSION) \
+		$(EXTRA_TAGS) \
+		--push \
+		.
 
-deploy: docker-build docker-push
+deploy: docker-push
+
+clean:
+	$(CONTAINER_TOOL) rmi $(IMAGE_NAME):$(VERSION) 2>/dev/null || true
 
 show-vars:
-	@echo "MODULE: $(MODULE)"
 	@echo "BINARY_NAME: $(BINARY_NAME)"
-	@echo "DOCKER_REGISTRY: $(DOCKER_REGISTRY)"
+	@echo "REGISTRY: $(REGISTRY)"
 	@echo "IMAGE_NAME: $(IMAGE_NAME)"
-	@echo "IMAGE_TAG: $(IMAGE_TAG)"
-	@echo "IMG: $(IMG)"
+	@echo "VERSION: $(VERSION)"
 	@echo "PLATFORM: $(PLATFORM)"
 	@echo "CONTAINER_TOOL: $(CONTAINER_TOOL)"
 
