@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -32,7 +33,18 @@ const (
 
 	browserContainerName = "browser"
 	sidecarContainerName = "seleniferous"
+
+	selenosisOptionsAnnotationKey = "selenosis.io/options"
 )
+
+type SelenosisOptions struct {
+	Labels     map[string]string          `json:"labels,omitempty"`
+	Containers map[string]ContainerOption `json:"containers,omitempty"`
+}
+
+type ContainerOption struct {
+	Env map[string]string `json:"env,omitempty"`
+}
 
 // +kubebuilder:rbac:groups=selenosis.io,resources=browsers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=selenosis.io,resources=browsers/status,verbs=get;update;patch
@@ -360,8 +372,26 @@ func (r *BrowserReconciler) handleMissingPod(ctx context.Context, browser *brows
 		return ctrl.Result{}, nil
 	}
 
+	opts, err := parseSelenosisOptions(browser.Annotations)
+	if err != nil {
+		log.Error(err, "invalid selenosis options JSON")
+		if err := r.retryStatusUpdate(ctx, browser, func(b *browserv1.Browser) {
+			b.Status.Phase = corev1.PodFailed
+			b.Status.Reason = "InvalidSelenosisOptions"
+			b.Status.Message = err.Error()
+		}); err != nil {
+			log.Error(err, "Failed to update Browser status")
+			return ctrl.Result{}, err
+		}
+
+		log.Info("Invalid selenosis options")
+		return ctrl.Result{}, nil
+	}
+
+	log.Info("parsed selenosis options", "hasOptions", opts != nil)
+
 	// Create pod from template
-	if err := r.createPod(ctx, browser, browserSpec); err != nil {
+	if err := r.createPod(ctx, browser, browserSpec, opts); err != nil {
 		if errors.IsAlreadyExists(err) {
 			log.Info("Browser Pod already exists, will reconcile on next iteration")
 			return ctrl.Result{RequeueAfter: quickCheck}, nil
@@ -375,10 +405,10 @@ func (r *BrowserReconciler) handleMissingPod(ctx context.Context, browser *brows
 }
 
 // createPod creates a Pod for Browser with optimized memory usage
-func (r *BrowserReconciler) createPod(ctx context.Context, browser *browserv1.Browser, browserSpec *configv1.BrowserVersionConfigSpec) error {
+func (r *BrowserReconciler) createPod(ctx context.Context, browser *browserv1.Browser, browserSpec *configv1.BrowserVersionConfigSpec, opts *SelenosisOptions) error {
 	log := logger.FromContext(ctx)
 
-	pod := buildBrowserPod(browser, browserSpec)
+	pod := buildBrowserPod(browser, browserSpec, opts)
 
 	log.Info("BrowserPodSpec configuration applied")
 	return r.client.Create(ctx, pod)
@@ -615,7 +645,7 @@ func (r *BrowserReconciler) deleteBrowser(ctx context.Context, browser *browserv
 	return ctrl.Result{}, nil
 }
 
-func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionConfigSpec) *corev1.Pod {
+func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionConfigSpec, opts *SelenosisOptions) *corev1.Pod {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      browser.GetName(),
@@ -778,6 +808,9 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 			pod.Annotations = map[string]string{}
 		}
 		for k, v := range browser.Annotations {
+			if k == selenosisOptionsAnnotationKey {
+				continue
+			}
 			pod.Annotations[k] = v
 		}
 	}
@@ -818,6 +851,8 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 	pod.Spec.Hostname = browser.GetName()
 	pod.Spec.RestartPolicy = corev1.RestartPolicyNever
 
+	applySelenosisOptions(pod, opts)
+
 	return pod
 }
 
@@ -826,4 +861,70 @@ func lenSidecars(cfg *configv1.BrowserVersionConfigSpec) int {
 		return len(*cfg.Sidecars)
 	}
 	return 0
+}
+
+func parseSelenosisOptions(ann map[string]string) (*SelenosisOptions, error) {
+	if ann == nil {
+		return nil, nil
+	}
+	raw := ann[selenosisOptionsAnnotationKey]
+	if raw == "" {
+		return nil, nil
+	}
+
+	var doc SelenosisOptions
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return nil, fmt.Errorf("unmarshal %s: %w", selenosisOptionsAnnotationKey, err)
+	}
+	return &doc, nil
+}
+
+func applySelenosisOptions(pod *corev1.Pod, opts *SelenosisOptions) {
+	if pod == nil || opts == nil {
+		return
+	}
+
+	if len(opts.Containers) > 0 {
+		for i := range pod.Spec.Containers {
+			name := pod.Spec.Containers[i].Name
+			option, ok := opts.Containers[name]
+			if !ok || len(option.Env) == 0 {
+				continue
+			}
+			pod.Spec.Containers[i].Env = mergeEnvVars(pod.Spec.Containers[i].Env, option.Env)
+		}
+	}
+
+	if opts.Labels != nil {
+		if pod.Labels == nil {
+			pod.Labels = map[string]string{}
+		}
+		for k, v := range opts.Labels {
+			pod.Labels[k] = v
+		}
+	}
+}
+
+func mergeEnvVars(base []corev1.EnvVar, override map[string]string) []corev1.EnvVar {
+	if len(override) == 0 {
+		return base
+	}
+
+	idx := make(map[string]int, len(base))
+	out := append([]corev1.EnvVar(nil), base...)
+	for i := range out {
+		idx[out[i].Name] = i
+	}
+
+	for k, v := range override {
+		ev := corev1.EnvVar{Name: k, Value: v}
+		if pos, ok := idx[k]; ok {
+			out[pos] = ev
+		} else {
+			idx[k] = len(out)
+			out = append(out, ev)
+		}
+	}
+
+	return out
 }

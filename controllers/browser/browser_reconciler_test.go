@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -53,6 +54,15 @@ func setStoreConfig(t *testing.T, cfgStore *store.BrowserConfigStore, key string
 	}
 	m := *(*map[string]*configv1.BrowserVersionConfigSpec)(unsafe.Pointer(v.UnsafeAddr()))
 	m[key] = spec
+}
+
+func envValue(env []corev1.EnvVar, key string) (string, bool) {
+	for _, item := range env {
+		if item.Name == key {
+			return item.Value, true
+		}
+	}
+	return "", false
 }
 
 func TestContainerStateEqual(t *testing.T) {
@@ -149,7 +159,7 @@ func TestBuildBrowserPod(t *testing.T) {
 		},
 	}
 
-	pod := buildBrowserPod(brw, cfg)
+	pod := buildBrowserPod(brw, cfg, nil)
 	if pod.Name != "b1" || pod.Namespace != "ns" {
 		t.Fatalf("unexpected pod identity")
 	}
@@ -164,6 +174,96 @@ func TestBuildBrowserPod(t *testing.T) {
 	}
 	if pod.Annotations["a"] != "b" {
 		t.Fatalf("expected annotations to be set")
+	}
+}
+
+func TestParseSelenosisOptionsInvalidJSON(t *testing.T) {
+	ann := map[string]string{
+		selenosisOptionsAnnotationKey: "{nope",
+	}
+	_, err := parseSelenosisOptions(ann)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), selenosisOptionsAnnotationKey) {
+		t.Fatalf("expected error to mention annotation key, got %v", err)
+	}
+}
+
+func TestParseSelenosisOptionsEmpty(t *testing.T) {
+	opts, err := parseSelenosisOptions(nil)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if opts != nil {
+		t.Fatalf("expected nil options for nil annotations")
+	}
+
+	opts, err = parseSelenosisOptions(map[string]string{selenosisOptionsAnnotationKey: ""})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if opts != nil {
+		t.Fatalf("expected nil options for empty annotation")
+	}
+}
+
+func TestParseSelenosisOptionsValidJSON(t *testing.T) {
+	ann := map[string]string{
+		selenosisOptionsAnnotationKey: `{"labels":{"a":"b"},"containers":{"browser":{"env":{"X":"1"}}}}`,
+	}
+	opts, err := parseSelenosisOptions(ann)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if opts == nil || opts.Labels["a"] != "b" {
+		t.Fatalf("expected labels to be parsed")
+	}
+	if opts.Containers["browser"].Env["X"] != "1" {
+		t.Fatalf("expected container env to be parsed")
+	}
+}
+
+func TestApplySelenosisOptionsMergesEnvAndLabels(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{"existing": "1"},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name: "browser",
+					Env: []corev1.EnvVar{
+						{Name: "A", Value: "1"},
+						{Name: "B", Value: "2"},
+					},
+				},
+				{Name: "sidecar"},
+			},
+		},
+	}
+	opts := &SelenosisOptions{
+		Labels: map[string]string{"from": "options"},
+		Containers: map[string]ContainerOption{
+			"browser": {Env: map[string]string{"B": "override", "C": "new"}},
+		},
+	}
+
+	applySelenosisOptions(pod, opts)
+
+	if pod.Labels["existing"] != "1" || pod.Labels["from"] != "options" {
+		t.Fatalf("expected labels to be merged, got %+v", pod.Labels)
+	}
+
+	env := pod.Spec.Containers[0].Env
+	if val, ok := envValue(env, "A"); !ok || val != "1" {
+		t.Fatalf("expected env A=1")
+	}
+	if val, ok := envValue(env, "B"); !ok || val != "override" {
+		t.Fatalf("expected env B override")
+	}
+	if val, ok := envValue(env, "C"); !ok || val != "new" {
+		t.Fatalf("expected env C new")
 	}
 }
 
@@ -261,6 +361,61 @@ func TestHandleMissingPodCreatesPod(t *testing.T) {
 	pod := &corev1.Pod{}
 	if err := cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, pod); err != nil {
 		t.Fatalf("expected pod to be created: %v", err)
+	}
+}
+
+func TestHandleMissingPodInvalidSelenosisOptions(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	cfgStore := store.NewBrowserConfigStore()
+	spec := &configv1.BrowserVersionConfigSpec{Image: "img"}
+	setStoreConfig(t, cfgStore, "ns/chrome:120", spec)
+
+	cl := newBrowserClient(scheme)
+	r := NewBrowserReconciler(cl, cfgStore, scheme)
+
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "b1",
+			Namespace: "ns",
+			Annotations: map[string]string{
+				selenosisOptionsAnnotationKey: "{bad-json",
+			},
+		},
+		Spec: browserv1.BrowserSpec{
+			BrowserName:    "chrome",
+			BrowserVersion: "120",
+		},
+	}
+	if err := cl.Create(context.Background(), brw); err != nil {
+		t.Fatalf("create browser: %v", err)
+	}
+
+	res, err := r.handleMissingPod(context.Background(), brw)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected no requeue, got %v", res.RequeueAfter)
+	}
+
+	updated := &browserv1.Browser{}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, updated); err != nil {
+		t.Fatalf("get browser: %v", err)
+	}
+	if updated.Status.Phase != corev1.PodFailed {
+		t.Fatalf("expected failed status, got %s", updated.Status.Phase)
+	}
+	if updated.Status.Reason != "InvalidSelenosisOptions" {
+		t.Fatalf("expected reason InvalidSelenosisOptions, got %s", updated.Status.Reason)
+	}
+
+	pod := &corev1.Pod{}
+	err = cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, pod)
+	if err == nil {
+		t.Fatalf("expected no pod to be created")
+	}
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("expected not found error, got %v", err)
 	}
 }
 
@@ -852,7 +1007,7 @@ func TestBuildBrowserPodWithInitContainersAndVolumes(t *testing.T) {
 		},
 	}
 
-	pod := buildBrowserPod(brw, cfg)
+	pod := buildBrowserPod(brw, cfg, nil)
 	if len(pod.Spec.InitContainers) != 1 {
 		t.Fatalf("expected init container")
 	}
@@ -893,7 +1048,7 @@ func TestBuildBrowserPodInitContainerFields(t *testing.T) {
 		},
 	}
 
-	pod := buildBrowserPod(brw, cfg)
+	pod := buildBrowserPod(brw, cfg, nil)
 	if len(pod.Spec.InitContainers) != 1 {
 		t.Fatalf("expected init container")
 	}
@@ -962,7 +1117,7 @@ func TestBuildBrowserPodAllFields(t *testing.T) {
 		},
 	}
 
-	pod := buildBrowserPod(brw, cfg)
+	pod := buildBrowserPod(brw, cfg, nil)
 	if pod.Spec.NodeSelector["k"] != "v" {
 		t.Fatalf("expected node selector")
 	}
@@ -995,7 +1150,7 @@ func TestBuildBrowserPodBrowserLabelsOnly(t *testing.T) {
 		},
 	}
 
-	pod := buildBrowserPod(brw, cfg)
+	pod := buildBrowserPod(brw, cfg, nil)
 	if pod.Labels["only"] != "browser" {
 		t.Fatalf("expected browser labels to be applied")
 	}
