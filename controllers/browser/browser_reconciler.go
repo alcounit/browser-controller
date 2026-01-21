@@ -872,11 +872,11 @@ func parseSelenosisOptions(ann map[string]string) (*SelenosisOptions, error) {
 		return nil, nil
 	}
 
-	var doc SelenosisOptions
-	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+	var opts SelenosisOptions
+	if err := json.Unmarshal([]byte(raw), &opts); err != nil {
 		return nil, fmt.Errorf("unmarshal %s: %w", selenosisOptionsAnnotationKey, err)
 	}
-	return &doc, nil
+	return &opts, nil
 }
 
 func applySelenosisOptions(pod *corev1.Pod, opts *SelenosisOptions) {
