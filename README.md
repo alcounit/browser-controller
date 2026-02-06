@@ -191,6 +191,7 @@ Supported fields include:
 - `labels`, `annotations`
 - `env`
 - `resources`
+- `imagePullPolicy`
 - `volumes`, `volumeMounts`
 - `nodeSelector`, `affinity`, `tolerations`
 - `hostAliases`
