@@ -702,6 +702,10 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 		Image: cfg.Image,
 	}
 
+	if cfg.ImagePullPolicy != "" {
+		browserContainer.ImagePullPolicy = cfg.ImagePullPolicy
+	}
+
 	if cfg.Env != nil {
 		browserContainer.Env = *cfg.Env
 	}

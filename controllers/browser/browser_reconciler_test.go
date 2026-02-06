@@ -177,6 +177,27 @@ func TestBuildBrowserPod(t *testing.T) {
 	}
 }
 
+func TestBuildBrowserPodMainContainerImagePullPolicy(t *testing.T) {
+	cfg := &configv1.BrowserVersionConfigSpec{
+		Image:           "browser",
+		ImagePullPolicy: corev1.PullAlways,
+	}
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "b1",
+			Namespace: "ns",
+		},
+	}
+
+	pod := buildBrowserPod(brw, cfg, nil)
+	if len(pod.Spec.Containers) == 0 {
+		t.Fatalf("expected at least one container")
+	}
+	if pod.Spec.Containers[0].ImagePullPolicy != corev1.PullAlways {
+		t.Fatalf("expected main container imagePullPolicy=%q, got %q", corev1.PullAlways, pod.Spec.Containers[0].ImagePullPolicy)
+	}
+}
+
 func TestParseSelenosisOptionsInvalidJSON(t *testing.T) {
 	ann := map[string]string{
 		browserv1.SelenosisOptionsAnnotationKey: "{nope",
