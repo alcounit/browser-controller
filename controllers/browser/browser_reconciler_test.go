@@ -177,15 +177,36 @@ func TestBuildBrowserPod(t *testing.T) {
 	}
 }
 
+func TestBuildBrowserPodMainContainerImagePullPolicy(t *testing.T) {
+	cfg := &configv1.BrowserVersionConfigSpec{
+		Image:           "browser",
+		ImagePullPolicy: corev1.PullAlways,
+	}
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "b1",
+			Namespace: "ns",
+		},
+	}
+
+	pod := buildBrowserPod(brw, cfg, nil)
+	if len(pod.Spec.Containers) == 0 {
+		t.Fatalf("expected at least one container")
+	}
+	if pod.Spec.Containers[0].ImagePullPolicy != corev1.PullAlways {
+		t.Fatalf("expected main container imagePullPolicy=%q, got %q", corev1.PullAlways, pod.Spec.Containers[0].ImagePullPolicy)
+	}
+}
+
 func TestParseSelenosisOptionsInvalidJSON(t *testing.T) {
 	ann := map[string]string{
-		selenosisOptionsAnnotationKey: "{nope",
+		browserv1.SelenosisOptionsAnnotationKey: "{nope",
 	}
 	_, err := parseSelenosisOptions(ann)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !strings.Contains(err.Error(), selenosisOptionsAnnotationKey) {
+	if !strings.Contains(err.Error(), browserv1.SelenosisOptionsAnnotationKey) {
 		t.Fatalf("expected error to mention annotation key, got %v", err)
 	}
 }
@@ -199,7 +220,7 @@ func TestParseSelenosisOptionsEmpty(t *testing.T) {
 		t.Fatalf("expected nil options for nil annotations")
 	}
 
-	opts, err = parseSelenosisOptions(map[string]string{selenosisOptionsAnnotationKey: ""})
+	opts, err = parseSelenosisOptions(map[string]string{browserv1.SelenosisOptionsAnnotationKey: ""})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -210,7 +231,7 @@ func TestParseSelenosisOptionsEmpty(t *testing.T) {
 
 func TestParseSelenosisOptionsValidJSON(t *testing.T) {
 	ann := map[string]string{
-		selenosisOptionsAnnotationKey: `{"labels":{"a":"b"},"containers":{"browser":{"env":{"X":"1"}}}}`,
+		browserv1.SelenosisOptionsAnnotationKey: `{"labels":{"a":"b"},"containers":{"browser":{"env":{"X":"1"}}}}`,
 	}
 	opts, err := parseSelenosisOptions(ann)
 	if err != nil {
@@ -378,7 +399,7 @@ func TestHandleMissingPodInvalidSelenosisOptions(t *testing.T) {
 			Name:      "b1",
 			Namespace: "ns",
 			Annotations: map[string]string{
-				selenosisOptionsAnnotationKey: "{bad-json",
+				browserv1.SelenosisOptionsAnnotationKey: "{bad-json",
 			},
 		},
 		Spec: browserv1.BrowserSpec{

@@ -45,6 +45,9 @@ type Template struct {
 	// Resources defines CPU/memory requests and limits for the main container.
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
+	//ImagePullPolicy defines container image pull policy
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+
 	// Volumes defines pod volumes.
 	Volumes *[]corev1.Volume `json:"volumes,omitempty"`
 
@@ -128,6 +131,7 @@ type BrowserVersionConfigSpec struct {
 	Annotations      *map[string]string             `json:"annotations,omitempty"`
 	Env              *[]corev1.EnvVar               `json:"env,omitempty"`
 	Resources        *corev1.ResourceRequirements   `json:"resources,omitempty"`
+	ImagePullPolicy  corev1.PullPolicy              `json:"imagePullPolicy,omitempty"`
 	Volumes          *[]corev1.Volume               `json:"volumes,omitempty"`
 	VolumeMounts     *[]corev1.VolumeMount          `json:"volumeMounts,omitempty"`
 	NodeSelector     *map[string]string             `json:"nodeSelector,omitempty"`
@@ -185,6 +189,9 @@ func (b *BrowserVersionConfigSpec) mergeWithSpec(t *BrowserConfigSpec) {
 	b.Annotations = mergeMapPtr(t.Template.Annotations, b.Annotations)
 	b.Env = mergeEnvPtr(t.Template.Env, b.Env)
 	b.Resources = firstNonNilResource(t.Template.Resources, b.Resources)
+	if b.ImagePullPolicy == "" {
+		b.ImagePullPolicy = t.Template.ImagePullPolicy
+	}
 	b.Volumes = mergeVolumePtr(t.Template.Volumes, b.Volumes)
 
 	b.NodeSelector = mergeMapPtr(t.Template.NodeSelector, b.NodeSelector)

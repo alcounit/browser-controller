@@ -33,8 +33,6 @@ const (
 
 	browserContainerName = "browser"
 	sidecarContainerName = "seleniferous"
-
-	selenosisOptionsAnnotationKey = "selenosis.io/options"
 )
 
 type SelenosisOptions struct {
@@ -704,6 +702,10 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 		Image: cfg.Image,
 	}
 
+	if cfg.ImagePullPolicy != "" {
+		browserContainer.ImagePullPolicy = cfg.ImagePullPolicy
+	}
+
 	if cfg.Env != nil {
 		browserContainer.Env = *cfg.Env
 	}
@@ -808,7 +810,7 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 			pod.Annotations = map[string]string{}
 		}
 		for k, v := range browser.Annotations {
-			if k == selenosisOptionsAnnotationKey {
+			if k == browserv1.SelenosisOptionsAnnotationKey {
 				continue
 			}
 			pod.Annotations[k] = v
@@ -867,14 +869,14 @@ func parseSelenosisOptions(ann map[string]string) (*SelenosisOptions, error) {
 	if ann == nil {
 		return nil, nil
 	}
-	raw := ann[selenosisOptionsAnnotationKey]
+	raw := ann[browserv1.SelenosisOptionsAnnotationKey]
 	if raw == "" {
 		return nil, nil
 	}
 
 	var opts SelenosisOptions
 	if err := json.Unmarshal([]byte(raw), &opts); err != nil {
-		return nil, fmt.Errorf("unmarshal %s: %w", selenosisOptionsAnnotationKey, err)
+		return nil, fmt.Errorf("unmarshal %s: %w", browserv1.SelenosisOptionsAnnotationKey, err)
 	}
 	return &opts, nil
 }
