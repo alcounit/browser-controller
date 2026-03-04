@@ -44,9 +44,12 @@ type ContainerOption struct {
 	Env map[string]string `json:"env,omitempty"`
 }
 
-// +kubebuilder:rbac:groups=selenosis.io,resources=browsers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=selenosis.io,resources=browsers/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=selenosis.io,resources=browsers/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=browser.selenosis.io,resources=browsers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=browser.selenosis.io,resources=browsers/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=browser.selenosis.io,resources=browsers/finalizers,verbs=update
 
 // BrowserReconciler reconciles Browser resources
 type BrowserReconciler struct {

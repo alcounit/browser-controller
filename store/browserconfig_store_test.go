@@ -61,7 +61,7 @@ func TestBrowserConfigStoreOnAddOrUpdateMergesAndStores(t *testing.T) {
 	}
 
 	store := NewBrowserConfigStore()
-	store.onAddOrUpdate(bc, logr.Discard())
+	store.onAddOrUpdate(nil, bc, logr.Discard())
 
 	cfg, ok := store.Get("ns", "CHROME", "144.0")
 	if !ok || cfg == nil {
@@ -94,7 +94,7 @@ func TestBrowserConfigStoreOnAddOrUpdateDeepCopyIsolated(t *testing.T) {
 	}
 
 	store := NewBrowserConfigStore()
-	store.onAddOrUpdate(bc, logr.Discard())
+	store.onAddOrUpdate(nil, bc, logr.Discard())
 
 	// Mutate original after add.
 	bc.Spec.Browsers["Chrome"]["144.0"].ImagePullPolicy = corev1.PullNever
@@ -122,7 +122,7 @@ func TestBrowserConfigStoreOnAddOrUpdateDeletedFinalStateUnknown(t *testing.T) {
 	}
 
 	store := NewBrowserConfigStore()
-	store.onAddOrUpdate(cache.DeletedFinalStateUnknown{Obj: bc}, logr.Discard())
+	store.onAddOrUpdate(nil, cache.DeletedFinalStateUnknown{Obj: bc}, logr.Discard())
 
 	if _, ok := store.Get("ns", "firefox", "120.0"); !ok {
 		t.Fatalf("expected config to be stored from DeletedFinalStateUnknown")
@@ -131,14 +131,44 @@ func TestBrowserConfigStoreOnAddOrUpdateDeletedFinalStateUnknown(t *testing.T) {
 
 func TestBrowserConfigStoreOnAddOrUpdateDeletedFinalStateUnknownNilObj(t *testing.T) {
 	store := NewBrowserConfigStore()
-	store.onAddOrUpdate(cache.DeletedFinalStateUnknown{Obj: (*configv1.BrowserConfig)(nil)}, logr.Discard())
+	store.onAddOrUpdate(nil, cache.DeletedFinalStateUnknown{Obj: (*configv1.BrowserConfig)(nil)}, logr.Discard())
 }
 
 func TestBrowserConfigStoreOnAddOrUpdateIgnoresUnknownType(t *testing.T) {
 	store := NewBrowserConfigStore()
-	store.onAddOrUpdate("not-a-config", logr.Discard())
+	store.onAddOrUpdate(nil, "not-a-config", logr.Discard())
 	if _, ok := store.Get("ns", "chrome", "144.0"); ok {
 		t.Fatalf("expected no configs to be stored")
+	}
+}
+
+func TestBrowserConfigStoreOnAddOrUpdateSkipsSameResourceVersion(t *testing.T) {
+	store := NewBrowserConfigStore()
+
+	oldObj := &configv1.BrowserConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "cfg",
+			Namespace:       "ns",
+			ResourceVersion: "10",
+		},
+		Spec: configv1.BrowserConfigSpec{
+			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
+				"Chrome": {"144.0": {Image: "old"}},
+			},
+		},
+	}
+	newObj := oldObj.DeepCopy()
+	newObj.Spec.Browsers["Chrome"]["144.0"].Image = "new"
+
+	store.onAddOrUpdate(nil, oldObj, logr.Discard())
+	store.onAddOrUpdate(oldObj, newObj, logr.Discard())
+
+	cfg, ok := store.Get("ns", "chrome", "144.0")
+	if !ok || cfg == nil {
+		t.Fatalf("expected config to be stored")
+	}
+	if cfg.Image != "old" {
+		t.Fatalf("expected update with same resourceVersion to be skipped, got image %q", cfg.Image)
 	}
 }
 
@@ -157,7 +187,7 @@ func TestBrowserConfigStoreOnDeleteRemovesKeys(t *testing.T) {
 	}
 
 	store := NewBrowserConfigStore()
-	store.onAddOrUpdate(bc, logr.Discard())
+	store.onAddOrUpdate(nil, bc, logr.Discard())
 
 	store.onDelete(bc, logr.Discard())
 
@@ -183,7 +213,7 @@ func TestBrowserConfigStoreOnDeleteDeletedFinalStateUnknown(t *testing.T) {
 	}
 
 	store := NewBrowserConfigStore()
-	store.onAddOrUpdate(bc, logr.Discard())
+	store.onAddOrUpdate(nil, bc, logr.Discard())
 
 	store.onDelete(cache.DeletedFinalStateUnknown{Obj: bc}, logr.Discard())
 	if _, ok := store.Get("ns", "safari", "17.0"); ok {

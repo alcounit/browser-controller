@@ -55,7 +55,7 @@ type browsers struct {
 }
 
 // newBrowsers returns a Browsers
-func newBrowsers(c *SelenosisV1Client, namespace string) *browsers {
+func newBrowsers(c *BrowserV1Client, namespace string) *browsers {
 	return &browsers{
 		gentype.NewClientWithList[*browserv1.Browser, *browserv1.BrowserList](
 			"browsers",

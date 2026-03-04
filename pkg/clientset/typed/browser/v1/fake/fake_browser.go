@@ -26,10 +26,10 @@ import (
 // fakeBrowsers implements BrowserInterface
 type fakeBrowsers struct {
 	*gentype.FakeClientWithList[*v1.Browser, *v1.BrowserList]
-	Fake *FakeSelenosisV1
+	Fake *FakeBrowserV1
 }
 
-func newFakeBrowsers(fake *FakeSelenosisV1, namespace string) browserv1.BrowserInterface {
+func newFakeBrowsers(fake *FakeBrowserV1, namespace string) browserv1.BrowserInterface {
 	return &fakeBrowsers{
 		gentype.NewFakeClientWithList[*v1.Browser, *v1.BrowserList](
 			fake.Fake,

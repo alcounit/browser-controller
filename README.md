@@ -350,3 +350,7 @@ Or combined:
 ```bash
 make deploy
 ```
+
+## Deployment
+
+Helm chart [selenosis-deploy](https://github.com/alcounit/selenosis-deploy)

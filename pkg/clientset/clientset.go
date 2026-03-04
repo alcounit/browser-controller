@@ -21,7 +21,8 @@ import (
 	fmt "fmt"
 	http "net/http"
 
-	selenosisv1 "github.com/alcounit/browser-controller/pkg/clientset/typed/browser/v1"
+	browserv1 "github.com/alcounit/browser-controller/pkg/clientset/typed/browser/v1"
+	browserconfigv1 "github.com/alcounit/browser-controller/pkg/clientset/typed/browserconfig/v1"
 	discovery "k8s.io/client-go/discovery"
 	rest "k8s.io/client-go/rest"
 	flowcontrol "k8s.io/client-go/util/flowcontrol"
@@ -29,18 +30,25 @@ import (
 
 type Interface interface {
 	Discovery() discovery.DiscoveryInterface
-	SelenosisV1() selenosisv1.SelenosisV1Interface
+	BrowserV1() browserv1.BrowserV1Interface
+	BrowserconfigV1() browserconfigv1.BrowserconfigV1Interface
 }
 
 // Clientset contains the clients for groups.
 type Clientset struct {
 	*discovery.DiscoveryClient
-	selenosisV1 *selenosisv1.SelenosisV1Client
+	browserV1       *browserv1.BrowserV1Client
+	browserconfigV1 *browserconfigv1.BrowserconfigV1Client
 }
 
-// SelenosisV1 retrieves the SelenosisV1Client
-func (c *Clientset) SelenosisV1() selenosisv1.SelenosisV1Interface {
-	return c.selenosisV1
+// BrowserV1 retrieves the BrowserV1Client
+func (c *Clientset) BrowserV1() browserv1.BrowserV1Interface {
+	return c.browserV1
+}
+
+// BrowserconfigV1 retrieves the BrowserconfigV1Client
+func (c *Clientset) BrowserconfigV1() browserconfigv1.BrowserconfigV1Interface {
+	return c.browserconfigV1
 }
 
 // Discovery retrieves the DiscoveryClient
@@ -87,7 +95,11 @@ func NewForConfigAndClient(c *rest.Config, httpClient *http.Client) (*Clientset,
 
 	var cs Clientset
 	var err error
-	cs.selenosisV1, err = selenosisv1.NewForConfigAndClient(&configShallowCopy, httpClient)
+	cs.browserV1, err = browserv1.NewForConfigAndClient(&configShallowCopy, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	cs.browserconfigV1, err = browserconfigv1.NewForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +124,8 @@ func NewForConfigOrDie(c *rest.Config) *Clientset {
 // New creates a new Clientset for the given RESTClient.
 func New(c rest.Interface) *Clientset {
 	var cs Clientset
-	cs.selenosisV1 = selenosisv1.New(c)
+	cs.browserV1 = browserv1.New(c)
+	cs.browserconfigV1 = browserconfigv1.New(c)
 
 	cs.DiscoveryClient = discovery.NewDiscoveryClient(c)
 	return &cs

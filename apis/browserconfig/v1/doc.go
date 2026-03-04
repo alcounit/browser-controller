@@ -1,4 +1,4 @@
 // +k8s:deepcopy-gen=package
-// +groupName=selenosis.io
+// +groupName=browserconfig.selenosis.io
 
 package v1

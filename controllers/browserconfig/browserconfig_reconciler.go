@@ -20,6 +20,11 @@ const (
 	mediumRetry                   = time.Second * 10
 )
 
+// +kubebuilder:rbac:groups=browserconfig.selenosis.io,resources=browserconfigs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=browserconfig.selenosis.io,resources=browserconfigs/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=browserconfig.selenosis.io,resources=browserconfigs/finalizers,verbs=update
+
+// BrowserConfigReconciler reconciles BrowserConfig resources
 type BrowserConfigReconciler struct {
 	client client.Client
 	scheme *runtime.Scheme
@@ -32,12 +37,14 @@ func NewBrowserConfigReconciler(client client.Client, scheme *runtime.Scheme) *B
 	}
 }
 
+// SetupWithManager sets up the controller with the Manager
 func (r *BrowserConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&configv1.BrowserConfig{}).
 		Complete(r)
 }
 
+// Reconcile synchronizes the state of BrowserConfig
 func (r BrowserConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logger.FromContext(ctx)
 

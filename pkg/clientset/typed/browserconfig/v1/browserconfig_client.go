@@ -20,29 +20,29 @@ package v1
 import (
 	http "net/http"
 
-	browserv1 "github.com/alcounit/browser-controller/apis/browser/v1"
+	browserconfigv1 "github.com/alcounit/browser-controller/apis/browserconfig/v1"
 	scheme "github.com/alcounit/browser-controller/pkg/clientset/scheme"
 	rest "k8s.io/client-go/rest"
 )
 
-type BrowserV1Interface interface {
+type BrowserconfigV1Interface interface {
 	RESTClient() rest.Interface
-	BrowsersGetter
+	BrowserConfigsGetter
 }
 
-// BrowserV1Client is used to interact with features provided by the browser.selenosis.io group.
-type BrowserV1Client struct {
+// BrowserconfigV1Client is used to interact with features provided by the browserconfig.selenosis.io group.
+type BrowserconfigV1Client struct {
 	restClient rest.Interface
 }
 
-func (c *BrowserV1Client) Browsers(namespace string) BrowserInterface {
-	return newBrowsers(c, namespace)
+func (c *BrowserconfigV1Client) BrowserConfigs(namespace string) BrowserConfigInterface {
+	return newBrowserConfigs(c, namespace)
 }
 
-// NewForConfig creates a new BrowserV1Client for the given config.
+// NewForConfig creates a new BrowserconfigV1Client for the given config.
 // NewForConfig is equivalent to NewForConfigAndClient(c, httpClient),
 // where httpClient was generated with rest.HTTPClientFor(c).
-func NewForConfig(c *rest.Config) (*BrowserV1Client, error) {
+func NewForConfig(c *rest.Config) (*BrowserconfigV1Client, error) {
 	config := *c
 	setConfigDefaults(&config)
 	httpClient, err := rest.HTTPClientFor(&config)
@@ -52,21 +52,21 @@ func NewForConfig(c *rest.Config) (*BrowserV1Client, error) {
 	return NewForConfigAndClient(&config, httpClient)
 }
 
-// NewForConfigAndClient creates a new BrowserV1Client for the given config and http client.
+// NewForConfigAndClient creates a new BrowserconfigV1Client for the given config and http client.
 // Note the http client provided takes precedence over the configured transport values.
-func NewForConfigAndClient(c *rest.Config, h *http.Client) (*BrowserV1Client, error) {
+func NewForConfigAndClient(c *rest.Config, h *http.Client) (*BrowserconfigV1Client, error) {
 	config := *c
 	setConfigDefaults(&config)
 	client, err := rest.RESTClientForConfigAndClient(&config, h)
 	if err != nil {
 		return nil, err
 	}
-	return &BrowserV1Client{client}, nil
+	return &BrowserconfigV1Client{client}, nil
 }
 
-// NewForConfigOrDie creates a new BrowserV1Client for the given config and
+// NewForConfigOrDie creates a new BrowserconfigV1Client for the given config and
 // panics if there is an error in the config.
-func NewForConfigOrDie(c *rest.Config) *BrowserV1Client {
+func NewForConfigOrDie(c *rest.Config) *BrowserconfigV1Client {
 	client, err := NewForConfig(c)
 	if err != nil {
 		panic(err)
@@ -74,13 +74,13 @@ func NewForConfigOrDie(c *rest.Config) *BrowserV1Client {
 	return client
 }
 
-// New creates a new BrowserV1Client for the given RESTClient.
-func New(c rest.Interface) *BrowserV1Client {
-	return &BrowserV1Client{c}
+// New creates a new BrowserconfigV1Client for the given RESTClient.
+func New(c rest.Interface) *BrowserconfigV1Client {
+	return &BrowserconfigV1Client{c}
 }
 
 func setConfigDefaults(config *rest.Config) {
-	gv := browserv1.SchemeGroupVersion
+	gv := browserconfigv1.SchemeGroupVersion
 	config.GroupVersion = &gv
 	config.APIPath = "/apis"
 	config.NegotiatedSerializer = rest.CodecFactoryForGeneratedClient(scheme.Scheme, scheme.Codecs).WithoutConversion()
@@ -92,7 +92,7 @@ func setConfigDefaults(config *rest.Config) {
 
 // RESTClient returns a RESTClient that is used to communicate
 // with API server by this client implementation.
-func (c *BrowserV1Client) RESTClient() rest.Interface {
+func (c *BrowserconfigV1Client) RESTClient() rest.Interface {
 	if c == nil {
 		return nil
 	}

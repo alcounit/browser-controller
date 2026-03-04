@@ -19,8 +19,10 @@ package fake
 
 import (
 	clientset "github.com/alcounit/browser-controller/pkg/clientset"
-	selenosisv1 "github.com/alcounit/browser-controller/pkg/clientset/typed/browser/v1"
-	fakeselenosisv1 "github.com/alcounit/browser-controller/pkg/clientset/typed/browser/v1/fake"
+	browserv1 "github.com/alcounit/browser-controller/pkg/clientset/typed/browser/v1"
+	fakebrowserv1 "github.com/alcounit/browser-controller/pkg/clientset/typed/browser/v1/fake"
+	browserconfigv1 "github.com/alcounit/browser-controller/pkg/clientset/typed/browserconfig/v1"
+	fakebrowserconfigv1 "github.com/alcounit/browser-controller/pkg/clientset/typed/browserconfig/v1/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
@@ -87,7 +89,12 @@ var (
 	_ testing.FakeClient  = &Clientset{}
 )
 
-// SelenosisV1 retrieves the SelenosisV1Client
-func (c *Clientset) SelenosisV1() selenosisv1.SelenosisV1Interface {
-	return &fakeselenosisv1.FakeSelenosisV1{Fake: &c.Fake}
+// BrowserV1 retrieves the BrowserV1Client
+func (c *Clientset) BrowserV1() browserv1.BrowserV1Interface {
+	return &fakebrowserv1.FakeBrowserV1{Fake: &c.Fake}
+}
+
+// BrowserconfigV1 retrieves the BrowserconfigV1Client
+func (c *Clientset) BrowserconfigV1() browserconfigv1.BrowserconfigV1Interface {
+	return &fakebrowserconfigv1.FakeBrowserconfigV1{Fake: &c.Fake}
 }
