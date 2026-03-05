@@ -5,7 +5,26 @@ metadata:
   name: browser-controller
 rules:
 - apiGroups:
-  - selenosis.io
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - browser.selenosis.io
   resources:
   - browsers
   verbs:
@@ -17,16 +36,53 @@ rules:
   - update
   - watch
 - apiGroups:
-  - selenosis.io
+  - browser.selenosis.io
   resources:
   - browsers/finalizers
   verbs:
   - update
 - apiGroups:
-  - selenosis.io
+  - browser.selenosis.io
   resources:
   - browsers/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - browserconfig.selenosis.io
+  resources:
+  - browserconfigs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - browserconfig.selenosis.io
+  resources:
+  - browserconfigs/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - browserconfig.selenosis.io
+  resources:
+  - browserconfigs/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch

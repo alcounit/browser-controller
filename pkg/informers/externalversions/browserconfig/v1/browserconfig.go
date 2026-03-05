@@ -21,81 +21,81 @@ import (
 	context "context"
 	time "time"
 
-	apisbrowserv1 "github.com/alcounit/browser-controller/apis/browser/v1"
+	apisbrowserconfigv1 "github.com/alcounit/browser-controller/apis/browserconfig/v1"
 	clientset "github.com/alcounit/browser-controller/pkg/clientset"
 	internalinterfaces "github.com/alcounit/browser-controller/pkg/informers/externalversions/internalinterfaces"
-	browserv1 "github.com/alcounit/browser-controller/pkg/listers/browser/v1"
+	browserconfigv1 "github.com/alcounit/browser-controller/pkg/listers/browserconfig/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	watch "k8s.io/apimachinery/pkg/watch"
 	cache "k8s.io/client-go/tools/cache"
 )
 
-// BrowserInformer provides access to a shared informer and lister for
-// Browsers.
-type BrowserInformer interface {
+// BrowserConfigInformer provides access to a shared informer and lister for
+// BrowserConfigs.
+type BrowserConfigInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() browserv1.BrowserLister
+	Lister() browserconfigv1.BrowserConfigLister
 }
 
-type browserInformer struct {
+type browserConfigInformer struct {
 	factory          internalinterfaces.SharedInformerFactory
 	tweakListOptions internalinterfaces.TweakListOptionsFunc
 	namespace        string
 }
 
-// NewBrowserInformer constructs a new informer for Browser type.
+// NewBrowserConfigInformer constructs a new informer for BrowserConfig type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewBrowserInformer(client clientset.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
-	return NewFilteredBrowserInformer(client, namespace, resyncPeriod, indexers, nil)
+func NewBrowserConfigInformer(client clientset.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
+	return NewFilteredBrowserConfigInformer(client, namespace, resyncPeriod, indexers, nil)
 }
 
-// NewFilteredBrowserInformer constructs a new informer for Browser type.
+// NewFilteredBrowserConfigInformer constructs a new informer for BrowserConfig type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewFilteredBrowserInformer(client clientset.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
+func NewFilteredBrowserConfigInformer(client clientset.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
 	return cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.BrowserV1().Browsers(namespace).List(context.Background(), options)
+				return client.BrowserconfigV1().BrowserConfigs(namespace).List(context.Background(), options)
 			},
 			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.BrowserV1().Browsers(namespace).Watch(context.Background(), options)
+				return client.BrowserconfigV1().BrowserConfigs(namespace).Watch(context.Background(), options)
 			},
 			ListWithContextFunc: func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.BrowserV1().Browsers(namespace).List(ctx, options)
+				return client.BrowserconfigV1().BrowserConfigs(namespace).List(ctx, options)
 			},
 			WatchFuncWithContext: func(ctx context.Context, options metav1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.BrowserV1().Browsers(namespace).Watch(ctx, options)
+				return client.BrowserconfigV1().BrowserConfigs(namespace).Watch(ctx, options)
 			},
 		},
-		&apisbrowserv1.Browser{},
+		&apisbrowserconfigv1.BrowserConfig{},
 		resyncPeriod,
 		indexers,
 	)
 }
 
-func (f *browserInformer) defaultInformer(client clientset.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-	return NewFilteredBrowserInformer(client, f.namespace, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
+func (f *browserConfigInformer) defaultInformer(client clientset.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
+	return NewFilteredBrowserConfigInformer(client, f.namespace, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
 }
 
-func (f *browserInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&apisbrowserv1.Browser{}, f.defaultInformer)
+func (f *browserConfigInformer) Informer() cache.SharedIndexInformer {
+	return f.factory.InformerFor(&apisbrowserconfigv1.BrowserConfig{}, f.defaultInformer)
 }
 
-func (f *browserInformer) Lister() browserv1.BrowserLister {
-	return browserv1.NewBrowserLister(f.Informer().GetIndexer())
+func (f *browserConfigInformer) Lister() browserconfigv1.BrowserConfigLister {
+	return browserconfigv1.NewBrowserConfigLister(f.Informer().GetIndexer())
 }

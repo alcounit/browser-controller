@@ -51,8 +51,8 @@ func (s *BrowserConfigStore) Start(ctx context.Context) error {
 	}
 
 	informer.AddEventHandler(kcache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { s.onAddOrUpdate(obj, s.log) },
-		UpdateFunc: func(_, newObj any) { s.onAddOrUpdate(newObj, s.log) },
+		AddFunc:    func(obj any) { s.onAddOrUpdate(nil, obj, s.log) },
+		UpdateFunc: func(oldObj, newObj any) { s.onAddOrUpdate(oldObj, newObj, s.log) },
 		DeleteFunc: func(obj any) { s.onDelete(obj, s.log) },
 	})
 
@@ -66,32 +66,48 @@ func (s *BrowserConfigStore) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *BrowserConfigStore) onAddOrUpdate(obj any, log logr.Logger) {
-	var bc *configv1.BrowserConfig
-	switch t := obj.(type) {
+func (s *BrowserConfigStore) onAddOrUpdate(oldObj, newObj any, log logr.Logger) {
+	var old *configv1.BrowserConfig
+	switch t := oldObj.(type) {
+	case nil:
 	case *configv1.BrowserConfig:
-		bc = t
+		old = t
 	case kcache.DeletedFinalStateUnknown:
 		if v, ok := t.Obj.(*configv1.BrowserConfig); ok {
-			bc = v
+			old = v
+		}
+	default:
+	}
+
+	var new *configv1.BrowserConfig
+	switch t := newObj.(type) {
+	case *configv1.BrowserConfig:
+		new = t
+	case kcache.DeletedFinalStateUnknown:
+		if v, ok := t.Obj.(*configv1.BrowserConfig); ok {
+			new = v
 		}
 	default:
 		return
 	}
 
-	if bc == nil {
+	if new == nil {
+		return
+	}
+
+	if old != nil && old.GetResourceVersion() == new.GetResourceVersion() {
 		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	bcCopy := bc.DeepCopy()
-	bcCopy.Spec.MergeWithTemplate()
+	copy := new.DeepCopy()
+	copy.Spec.MergeWithTemplate()
 
-	for browserName, versions := range bcCopy.Spec.Browsers {
+	for browserName, versions := range copy.Spec.Browsers {
 		for version, cfg := range versions {
-			key := keyFor(bcCopy.Namespace, browserName, version)
+			key := keyFor(copy.Namespace, browserName, version)
 			s.config[key] = cfg
 			log.Info("BrowserConfig added/updated", "key", key)
 		}

@@ -24,6 +24,7 @@ import (
 
 	clientset "github.com/alcounit/browser-controller/pkg/clientset"
 	browser "github.com/alcounit/browser-controller/pkg/informers/externalversions/browser"
+	browserconfig "github.com/alcounit/browser-controller/pkg/informers/externalversions/browserconfig"
 	internalinterfaces "github.com/alcounit/browser-controller/pkg/informers/externalversions/internalinterfaces"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
@@ -253,9 +254,14 @@ type SharedInformerFactory interface {
 	// client.
 	InformerFor(obj runtime.Object, newFunc internalinterfaces.NewInformerFunc) cache.SharedIndexInformer
 
-	Selenosis() browser.Interface
+	Browser() browser.Interface
+	Browserconfig() browserconfig.Interface
 }
 
-func (f *sharedInformerFactory) Selenosis() browser.Interface {
+func (f *sharedInformerFactory) Browser() browser.Interface {
 	return browser.New(f, f.namespace, f.tweakListOptions)
+}
+
+func (f *sharedInformerFactory) Browserconfig() browserconfig.Interface {
+	return browserconfig.New(f, f.namespace, f.tweakListOptions)
 }

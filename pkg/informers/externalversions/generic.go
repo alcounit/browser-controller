@@ -21,6 +21,7 @@ import (
 	fmt "fmt"
 
 	v1 "github.com/alcounit/browser-controller/apis/browser/v1"
+	browserconfigv1 "github.com/alcounit/browser-controller/apis/browserconfig/v1"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	cache "k8s.io/client-go/tools/cache"
 )
@@ -51,9 +52,13 @@ func (f *genericInformer) Lister() cache.GenericLister {
 // TODO extend this to unknown resources with a client pool
 func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource) (GenericInformer, error) {
 	switch resource {
-	// Group=selenosis.io, Version=v1
+	// Group=browser.selenosis.io, Version=v1
 	case v1.SchemeGroupVersion.WithResource("browsers"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Selenosis().V1().Browsers().Informer()}, nil
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Browser().V1().Browsers().Informer()}, nil
+
+		// Group=browserconfig.selenosis.io, Version=v1
+	case browserconfigv1.SchemeGroupVersion.WithResource("browserconfigs"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Browserconfig().V1().BrowserConfigs().Informer()}, nil
 
 	}
 

@@ -18,7 +18,8 @@ limitations under the License.
 package fake
 
 import (
-	selenosisv1 "github.com/alcounit/browser-controller/apis/browser/v1"
+	browserv1 "github.com/alcounit/browser-controller/apis/browser/v1"
+	browserconfigv1 "github.com/alcounit/browser-controller/apis/browserconfig/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -30,7 +31,8 @@ var scheme = runtime.NewScheme()
 var codecs = serializer.NewCodecFactory(scheme)
 
 var localSchemeBuilder = runtime.SchemeBuilder{
-	selenosisv1.AddToScheme,
+	browserv1.AddToScheme,
+	browserconfigv1.AddToScheme,
 }
 
 // AddToScheme adds all types of this clientset into the given scheme. This allows composition
