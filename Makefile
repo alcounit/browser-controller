@@ -81,7 +81,7 @@ informer:
 
 manifests:
 	@$(CONTROLLER_GEN) \
-		crd \
+		crd:maxDescLen=0 \
 		rbac:roleName=browser-controller \
 		paths="$(MODULE)/..." \
 		output:crd:artifacts:config=config/crd \
