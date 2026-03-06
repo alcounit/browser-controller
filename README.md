@@ -1,4 +1,4 @@
-[![Go Reference](https://pkg.go.dev/badge/github.com/alcounit/browser-controller.svg)](https://pkg.go.dev/github.com/alcounit/browser-controller) [![Docker Pulls](https://img.shields.io/docker/pulls/alcounit/browser-controller.svg)](https://hub.docker.com/r/alcounit/browser-controller)
+[![GitHub release](https://img.shields.io/github/v/release/alcounit/browser-controller)](https://github.com/alcounit/browser-controller/releases) [![Go Reference](https://pkg.go.dev/badge/github.com/alcounit/browser-controller.svg)](https://pkg.go.dev/github.com/alcounit/browser-controller) [![Docker Pulls](https://img.shields.io/docker/pulls/alcounit/browser-controller.svg)](https://hub.docker.com/r/alcounit/browser-controller)
 
 # Browser Controller
 
