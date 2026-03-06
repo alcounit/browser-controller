@@ -1,3 +1,5 @@
+[![Go Reference](https://pkg.go.dev/badge/github.com/alcounit/browser-controller.svg)](https://pkg.go.dev/github.com/alcounit/browser-controller)
+
 # Browser Controller
 
 Browser Controller is a Kubernetes controller for the **Selenosis** ecosystem.  
