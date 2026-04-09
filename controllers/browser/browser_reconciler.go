@@ -175,7 +175,7 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if err := r.retryStatusUpdate(ctx, browser, func(b *browserv1.Browser) {
 			b.Status.Phase = corev1.PodFailed
 			b.Status.Message = fmt.Sprintf("Browser pod has failed with reason: %s - %s", pod.Status.Reason, pod.Status.Message)
-			log.Info("Browser Pod has failed", "reason", pod.Status.Reason, "message", pod.Status.Message)
+			log.Info("Browser pod has failed", "reason", pod.Status.Reason, "message", pod.Status.Message)
 		}); err != nil {
 			log.Error(err, "failed to update Browser status to Failed")
 			return ctrl.Result{RequeueAfter: mediumRetry}, err
@@ -186,7 +186,7 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.State.Terminated != nil {
-				log.Info("Browser Pod container terminated",
+				log.Info("Browser pod container terminated",
 					"container", cs.Name,
 					"reason", cs.State.Terminated.Reason,
 					"message", pod.Status.Message,
@@ -209,7 +209,7 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				if !pod.CreationTimestamp.IsZero() {
 					podAge := time.Since(pod.CreationTimestamp.Time)
 					if podAge > podCreationTimeout {
-						log.Info("Browser Pod creation timeout exceeded", "age", podAge.String(), "podStatus", pod.Status.Phase, "container", cs.Name)
+						log.Info("Browser pod creation timeout exceeded", "age", podAge.String(), "podStatus", pod.Status.Phase, "container", cs.Name)
 						if err := r.deletePod(ctx, pod); err != nil {
 							return ctrl.Result{RequeueAfter: mediumRetry}, err
 						}
@@ -227,7 +227,7 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 				reason := cs.State.Waiting.Reason
 				if reason != "ContainerCreating" && reason != "PodInitializing" {
-					log.Info("Browser Pod container not ready", "container", cs.Name, "reason", reason, "message", cs.State.Waiting.Message, "podStatus", pod.Status.Phase)
+					log.Info("Browser pod container not ready", "container", cs.Name, "reason", reason, "message", cs.State.Waiting.Message, "podStatus", pod.Status.Phase)
 
 					if err := r.deletePod(ctx, pod); err != nil {
 						return ctrl.Result{RequeueAfter: mediumRetry}, err
@@ -384,7 +384,7 @@ func (r *BrowserReconciler) handleMissingPod(ctx context.Context, browser *brows
 	// Create pod from template
 	if err := r.createPod(ctx, browser, browserSpec, opts); err != nil {
 		if errors.IsAlreadyExists(err) {
-			log.Info("Browser Pod already exists, will reconcile on next iteration")
+			log.Info("Browser pod already exists, will reconcile on next iteration")
 			return ctrl.Result{RequeueAfter: quickCheck}, nil
 		}
 		log.Error(err, "failed to create Browser pod")
@@ -427,7 +427,7 @@ func (r *BrowserReconciler) updateBrowserStatus(ctx context.Context, browser *br
 				log.Info("Browser status set to Failed")
 			}
 
-			log.Info("Browser Pod container statuses",
+			log.Info("Browser pod container statuses",
 				"containerName",
 				containerStatus.Name,
 				"containerReady",
