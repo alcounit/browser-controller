@@ -107,6 +107,9 @@ func (s *BrowserConfigStore) onAddOrUpdate(oldObj, newObj any, log logr.Logger) 
 
 	for browserName, versions := range copy.Spec.Browsers {
 		for version, cfg := range versions {
+			if cfg == nil {
+				continue
+			}
 			key := keyFor(copy.Namespace, browserName, version)
 			s.config[key] = cfg
 			log.Info("BrowserConfig added/updated", "key", key)
@@ -148,5 +151,9 @@ func (s *BrowserConfigStore) Get(namespace, browserName, version string) (*confi
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	cfg, exists := s.config[keyFor(namespace, browserName, version)]
-	return cfg, exists
+	if !exists {
+		return nil, false
+	}
+
+	return cfg.DeepCopy(), exists
 }

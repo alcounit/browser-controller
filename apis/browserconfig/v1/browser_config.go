@@ -205,7 +205,7 @@ func (b *BrowserVersionConfigSpec) mergeWithSpec(t *BrowserConfigSpec) {
 
 	b.Tolerations = mergeTolerationPtr(t.Template.Tolerations, b.Tolerations)
 	b.HostAliases = mergeHostAliasPtr(t.Template.HostAliases, b.HostAliases)
-	b.VolumeMounts = mergeVolumeMountsPtr(b.VolumeMounts, t.Template.VolumeMounts)
+	b.VolumeMounts = mergeVolumeMountsPtr(t.Template.VolumeMounts, b.VolumeMounts)
 
 	originalSidecars := b.Sidecars
 
@@ -227,7 +227,7 @@ func (b *BrowserVersionConfigSpec) mergeWithSpec(t *BrowserConfigSpec) {
 
 	originalInitContainers := b.InitContainers
 
-	b.InitContainers = mergeSidecarPtr(b.InitContainers, t.Template.InitContainers)
+	b.InitContainers = mergeSidecarPtr(t.Template.InitContainers, b.InitContainers)
 
 	if originalInitContainers != nil && t.Template.InitContainers != nil {
 		for i := range *b.InitContainers {
@@ -288,22 +288,26 @@ func mergeEnvPtr(template, override *[]corev1.EnvVar) *[]corev1.EnvVar {
 		return nil
 	}
 
-	result := map[string]corev1.EnvVar{}
+	// Build merged slice preserving template order; override vars replace template vars in-place,
+	// new override-only vars are appended at the end.
+	index := make(map[string]int) // name -> position in merged
+	merged := make([]corev1.EnvVar, 0)
+
 	if template != nil {
 		for _, env := range *template {
-			result[env.Name] = env
+			index[env.Name] = len(merged)
+			merged = append(merged, env)
 		}
 	}
 
 	if override != nil {
 		for _, env := range *override {
-			result[env.Name] = env
+			if i, exists := index[env.Name]; exists {
+				merged[i] = env
+			} else {
+				merged = append(merged, env)
+			}
 		}
-	}
-
-	merged := make([]corev1.EnvVar, 0, len(result))
-	for _, env := range result {
-		merged = append(merged, env)
 	}
 
 	return &merged
@@ -440,7 +444,10 @@ func (s *Sidecar) mergeWithTemplate(t *Sidecar) {
 		s.Command = t.Command
 	}
 
-	s.WorkingDir = t.WorkingDir
+	if s.WorkingDir == nil {
+		s.WorkingDir = t.WorkingDir
+	}
+
 	s.Env = mergeEnvPtr(t.Env, s.Env)
 	s.Ports = mergeContainerPortPtr(t.Ports, s.Ports)
 	s.VolumeMounts = mergeVolumeMountPtr(t.VolumeMounts, s.VolumeMounts)

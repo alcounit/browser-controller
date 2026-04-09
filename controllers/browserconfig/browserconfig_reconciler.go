@@ -45,7 +45,7 @@ func (r *BrowserConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // Reconcile synchronizes the state of BrowserConfig
-func (r BrowserConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *BrowserConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logger.FromContext(ctx)
 
 	browserConfig := &configv1.BrowserConfig{}
