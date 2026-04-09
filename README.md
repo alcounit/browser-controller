@@ -317,6 +317,53 @@ kubectl get browserconfig default-browser-config -o yaml
 
 ---
 
+## Resource Cleanup
+
+The controller is responsible for ensuring that both the `Browser` CR and its associated Pod are always cleaned up, regardless of the failure mode. Cleanup is enforced through a **finalizer** (`browserpod.selenosis.io/finalizer`) placed on every `Browser` CR.
+
+### Mechanism
+
+Every `Browser` CR receives the finalizer on creation. The controller uses two internal primitives:
+
+- **`deletePod`** — force-deletes the Pod with `gracePeriodSeconds=0`. Ignores `NotFound` (safe to call even if Pod is already gone).
+- **`deleteBrowser`** — removes the finalizer from the `Browser` CR, then calls `Delete` on the CR. After the finalizer is removed Kubernetes completes the deletion immediately.
+
+Most failure paths follow a **two-step process** across two reconcile cycles:
+
+1. **First reconcile** — detects the failure, force-deletes the Pod, sets `Browser.status.phase=Failed` with a descriptive message.
+2. **Second reconcile** — sees `status.phase=Failed`, calls `deletePod` (no-op if already gone) and `deleteBrowser`, which removes the CR.
+
+### Cleanup Scenarios
+
+| Scenario | Pod | Browser CR |
+|---|---|---|
+| No matching `BrowserConfig` | never created | set to `Failed` → next reconcile: **deleted** |
+| `podCreationTimeout` exceeded (pod stuck `Pending` > 5 min) | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
+| `PodPending` + container `Terminated` | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
+| `PodPending` + container `Waiting` with non-transient reason (`CrashLoopBackOff`, `ErrImagePull`, `ImagePullBackOff`, etc.) | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
+| Pod phase `Failed` | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
+| `Browser.status.phase=Failed` (failed early exit — any of the above on the next reconcile) | force-deleted (grace=0) | finalizer removed → `Delete` → **deleted** |
+| Critical container (`browser` or `seleniferous`) `Terminated` while pod is `Running` | **deleted** via OwnerReference GC after CR deletion | `deleteBrowser` → finalizer removed → **deleted** |
+| `Browser` CR `DeletionTimestamp` set (external `kubectl delete`) | explicit `Delete` in `handleDeletion`, waits for pod termination | finalizer removed after pod is gone → **deleted** |
+| Pod `DeletionTimestamp` set while CR is alive | already terminating | `deleteBrowser` triggered → **deleted** |
+| Pod stuck `Terminating` beyond `podDeletionTimeout` (5 min) | force-deleted (grace=0, best-effort) | finalizer removed regardless → **deleted** |
+
+### `Browser.status.message` on Failure
+
+Every failure path writes a human-readable message to `Browser.status.message` before deletion:
+
+| Cause | Example message |
+|---|---|
+| No `BrowserConfig` | `Browser configuration not found` |
+| Creation timeout | `pod creation timeout exceeded after 5m0s, container browser: ContainerCreating` |
+| Container terminated | `pod container browser terminated: OOMKilled (exit code 137)` |
+| Container not ready | `pod container browser failed: CrashLoopBackOff - back-off restarting failed container` |
+| Pod failed | `pod has failed with reason: OOMKilled - container exceeded memory limit` |
+
+This message is available in `Browser.status` until the CR is removed and is propagated as an SSE event by `browser-service`, making it observable to clients before the CR disappears.
+
+---
+
 ## Build & Generate
 
 This project uses `make` to generate code, manifests, and build the controller image.

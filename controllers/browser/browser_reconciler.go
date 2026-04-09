@@ -97,19 +97,12 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.handleDeletion(ctx, browser)
 	}
 
-	// check if Browser is in Failed state, remove finalizer gc will take care Browser
 	if browser.Status.Phase == corev1.PodFailed {
-		// Remove finalizer
-		if controllerutil.ContainsFinalizer(browser, browserPodFinalizer) {
-			if err := r.retryUpdate(ctx, browser, func(b *browserv1.Browser) {
-				controllerutil.RemoveFinalizer(b, browserPodFinalizer)
-			}); err != nil {
-				log.Error(err, "error removing Browser pod finalizer")
-				return ctrl.Result{RequeueAfter: mediumRetry}, err
-			}
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: browser.Name, Namespace: browser.Namespace}}
+		if err := r.deletePod(ctx, pod); err != nil {
+			return ctrl.Result{RequeueAfter: mediumRetry}, err
 		}
-		log.Info("Browser is in Failed state, nothing to do")
-		return ctrl.Result{}, nil
+		return r.deleteBrowser(ctx, browser)
 	}
 
 	// ensure finalizer is set
@@ -136,7 +129,7 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			log.Error(err, "failed to update Browser with name label")
 			return ctrl.Result{RequeueAfter: mediumRetry}, err
 		}
-		log.Info("label selenosis.io/browser.name assigned to Browser")
+		log.Info("labels assigned to Browser")
 	}
 
 	// Set Pending status if not set
@@ -157,11 +150,6 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	pod := &corev1.Pod{}
 	if err := r.client.Get(ctx, types.NamespacedName{Name: browser.GetName(), Namespace: browser.GetNamespace()}, pod); err != nil {
 		if errors.IsNotFound(err) {
-			if browser.Status.Phase == corev1.PodFailed {
-				log.Info("Browser is Failed state, browser pod not found. Ignoring since must be deleted")
-				return ctrl.Result{}, nil
-			}
-
 			log.Info("Browser pod not found, creating new Browser pod")
 			return r.handleMissingPod(ctx, browser)
 		}
@@ -172,7 +160,7 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// Handle pod being deleted
 	if !pod.DeletionTimestamp.IsZero() && browser.DeletionTimestamp.IsZero() {
-		log.Info("Browser Pod is being deleted, deleting Browser resource")
+		log.Info("Browser pod is being deleted, deleting Browser resource")
 		return r.deleteBrowser(ctx, browser)
 	}
 
@@ -180,14 +168,14 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if pod.Status.Phase == corev1.PodFailed {
 
 		if err := r.deletePod(ctx, pod); err != nil {
-			log.Info("deleting Browser Pod")
+			log.Info("deleting Browser pod after pod failure")
 			return ctrl.Result{RequeueAfter: mediumRetry}, err
 		}
 
 		if err := r.retryStatusUpdate(ctx, browser, func(b *browserv1.Browser) {
 			b.Status.Phase = corev1.PodFailed
-			b.Status.Message = fmt.Sprintf("pod has failed with reason: %s - %s", pod.Status.Reason, pod.Status.Message)
-			log.Info("Browser Pod has failed", "reason", pod.Status.Reason, "message", pod.Status.Message)
+			b.Status.Message = fmt.Sprintf("Browser pod has failed with reason: %s - %s", pod.Status.Reason, pod.Status.Message)
+			log.Info("Browser pod has failed", "reason", pod.Status.Reason, "message", pod.Status.Message)
 		}); err != nil {
 			log.Error(err, "failed to update Browser status to Failed")
 			return ctrl.Result{RequeueAfter: mediumRetry}, err
@@ -198,19 +186,19 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.State.Terminated != nil {
+				log.Info("Browser pod container terminated",
+					"container", cs.Name,
+					"reason", cs.State.Terminated.Reason,
+					"message", pod.Status.Message,
+					"exitCode", cs.State.Terminated.ExitCode)
+				if err := r.deletePod(ctx, pod); err != nil {
+					return ctrl.Result{RequeueAfter: mediumRetry}, err
+				}
 				if err := r.retryStatusUpdate(ctx, browser, func(b *browserv1.Browser) {
 					b.Status.Phase = corev1.PodFailed
-					b.Status.Message = fmt.Sprintf("pod container %s terminated", cs.Name)
-
-					log.Info("Browser Pod container terminated",
-						"container",
-						cs.Name,
-						"reason",
-						cs.State.Terminated.Reason,
-						"message",
-						pod.Status.Message,
-						"exitCode",
-						cs.State.Terminated.ExitCode)
+					b.Status.Message = fmt.Sprintf(
+						"pod container %s terminated: %s (exit code %d)",
+						cs.Name, cs.State.Terminated.Reason, cs.State.Terminated.ExitCode)
 				}); err != nil {
 					return ctrl.Result{RequeueAfter: mediumRetry}, err
 				}
@@ -221,13 +209,15 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				if !pod.CreationTimestamp.IsZero() {
 					podAge := time.Since(pod.CreationTimestamp.Time)
 					if podAge > podCreationTimeout {
-						log.Info("Browser Pod creation timeout exceeded", "age", podAge.String(), "podStatus", pod.Status.Phase, "container", cs.Name)
-
+						log.Info("Browser pod creation timeout exceeded", "age", podAge.String(), "podStatus", pod.Status.Phase, "container", cs.Name)
+						if err := r.deletePod(ctx, pod); err != nil {
+							return ctrl.Result{RequeueAfter: mediumRetry}, err
+						}
 						if err := r.retryStatusUpdate(ctx, browser, func(b *browserv1.Browser) {
 							b.Status.Phase = corev1.PodFailed
 							b.Status.Message = fmt.Sprintf(
-								"pod creation timeout exceeded after %s",
-								podCreationTimeout.String())
+								"pod creation timeout exceeded after %s, container %s: %s",
+								podCreationTimeout.String(), cs.Name, cs.State.Waiting.Reason)
 						}); err != nil {
 							return ctrl.Result{RequeueAfter: mediumRetry}, err
 						}
@@ -237,7 +227,7 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 				reason := cs.State.Waiting.Reason
 				if reason != "ContainerCreating" && reason != "PodInitializing" {
-					log.Info("Browser Pod container not ready", "container", cs.Name, "reason", reason, "message", cs.State.Waiting.Message, "podStatus", pod.Status.Phase)
+					log.Info("Browser pod container not ready", "container", cs.Name, "reason", reason, "message", cs.State.Waiting.Message, "podStatus", pod.Status.Phase)
 
 					if err := r.deletePod(ctx, pod); err != nil {
 						return ctrl.Result{RequeueAfter: mediumRetry}, err
@@ -246,7 +236,7 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					if err := r.retryStatusUpdate(ctx, browser, func(b *browserv1.Browser) {
 						b.Status.Phase = corev1.PodFailed
 						b.Status.Message = fmt.Sprintf(
-							"pod container %s failed: %s - %s",
+							"Browser pod container %s failed: %s - %s",
 							cs.Name, reason, cs.State.Waiting.Message)
 					}); err != nil {
 						return ctrl.Result{RequeueAfter: mediumRetry}, err
@@ -276,12 +266,12 @@ func (r *BrowserReconciler) handleDeletion(ctx context.Context, browser *browser
 	// Delete pod if exists
 	if err == nil {
 		if pod.DeletionTimestamp.IsZero() {
-			log.Info("deleting associated pod")
+			log.Info("deleting associated Browser pod")
 
 			var deleteOptions []client.DeleteOption
 			if pod.Status.Phase == corev1.PodFailed {
 				deleteOptions = append(deleteOptions, client.GracePeriodSeconds(0))
-				log.Info("using force delete for failed pod")
+				log.Info("using force delete for failed Browser pod")
 			}
 
 			if err := r.client.Delete(ctx, pod, deleteOptions...); err != nil && !errors.IsNotFound(err) {
@@ -294,25 +284,25 @@ func (r *BrowserReconciler) handleDeletion(ctx context.Context, browser *browser
 		if pod.DeletionTimestamp != nil {
 			deletionTime := pod.DeletionTimestamp.Time
 			if time.Since(deletionTime) > podDeletionTimeout {
-				log.Info("Pod deletion is taking too long, attempting force delete")
+				log.Info("Browser pod deletion is taking too long, attempting force delete")
 				if err := r.deletePod(ctx, pod); err != nil {
-					log.Error(err, "Failed to force delete pod after timeout")
+					log.Error(err, "Failed to force delete Browser pod after timeout")
 					// Continue anyway to remove finalizer
 				}
 			} else {
 				// Wait for pod to be deleted
-				log.Info("waiting for pod to be deleted")
+				log.Info("waiting for Browser pod to be deleted")
 				return ctrl.Result{RequeueAfter: quickCheck}, nil
 			}
 		} else {
 			// Wait for pod to be deleted
-			log.Info("waiting for pod to be deleted")
+			log.Info("waiting for Browser pod to be deleted")
 			return ctrl.Result{RequeueAfter: quickCheck}, nil
 		}
 	} else if !errors.IsNotFound(err) {
 		log.Error(err, "error checking Browser pod for deletion")
 		// Don't block Browser deletion if we can't get the Pod
-		log.Info("proceeding with finalizer removal despite pod check error")
+		log.Info("proceeding with finalizer removal despite Browser pod check error")
 	}
 
 	// Remove finalizer
@@ -334,12 +324,12 @@ func (r *BrowserReconciler) deletePod(ctx context.Context, pod *corev1.Pod) erro
 
 	if err := r.client.Delete(ctx, pod, client.GracePeriodSeconds(0)); err != nil {
 		if !errors.IsNotFound(err) {
-			log.Error(err, "failed to force delete Browser Pod")
+			log.Error(err, "failed to force delete Browser pod")
 			return err
 		}
 	}
 
-	log.Info("Browser Pod forcibly deleted")
+	log.Info("Browser pod forcibly deleted")
 	return nil
 }
 
@@ -394,14 +384,14 @@ func (r *BrowserReconciler) handleMissingPod(ctx context.Context, browser *brows
 	// Create pod from template
 	if err := r.createPod(ctx, browser, browserSpec, opts); err != nil {
 		if errors.IsAlreadyExists(err) {
-			log.Info("Browser Pod already exists, will reconcile on next iteration")
+			log.Info("Browser pod already exists, will reconcile on next iteration")
 			return ctrl.Result{RequeueAfter: quickCheck}, nil
 		}
-		log.Error(err, "failed to create Browser Pod")
+		log.Error(err, "failed to create Browser pod")
 		return ctrl.Result{}, err
 	}
 
-	log.Info("Browser Pod created")
+	log.Info("Browser pod created")
 	return ctrl.Result{RequeueAfter: quickCheck}, nil
 }
 
@@ -437,7 +427,7 @@ func (r *BrowserReconciler) updateBrowserStatus(ctx context.Context, browser *br
 				log.Info("Browser status set to Failed")
 			}
 
-			log.Info("Browser Pod container statuses",
+			log.Info("Browser pod container statuses",
 				"containerName",
 				containerStatus.Name,
 				"containerReady",
@@ -472,20 +462,7 @@ func (r *BrowserReconciler) updateBrowserStatus(ctx context.Context, browser *br
 			newContainerStatuses = append(newContainerStatuses, status)
 		}
 
-		// Check if container statuses changed (simplified check, could be improved with DeepEqual)
-		if len(newContainerStatuses) != len(browser.Status.ContainerStatuses) {
-			containersStatusChanged = true
-		} else {
-			// Simple check for changes (could be improved with full comparison)
-			for i := range newContainerStatuses {
-				if i >= len(browser.Status.ContainerStatuses) ||
-					newContainerStatuses[i].RestartCount != browser.Status.ContainerStatuses[i].RestartCount ||
-					!containerStateEqual(newContainerStatuses[i].State, browser.Status.ContainerStatuses[i].State) {
-					containersStatusChanged = true
-					break
-				}
-			}
-		}
+		containersStatusChanged = !containerStatusesEqual(newContainerStatuses, browser.Status.ContainerStatuses)
 	}
 
 	// Update status if changed
@@ -509,58 +486,6 @@ func (r *BrowserReconciler) updateBrowserStatus(ctx context.Context, browser *br
 
 	log.Info("reconcilation completed")
 	return ctrl.Result{RequeueAfter: periodicReconcile}, nil
-}
-
-func containerStateEqual(a, b corev1.ContainerState) bool {
-	if (a.Running != nil) != (b.Running != nil) {
-		return false
-	}
-	if (a.Terminated != nil) != (b.Terminated != nil) {
-		return false
-	}
-	if (a.Waiting != nil) != (b.Waiting != nil) {
-		return false
-	}
-
-	if a.Running != nil && b.Running != nil {
-		return a.Running.StartedAt.Equal(&b.Running.StartedAt)
-	}
-	if a.Terminated != nil && b.Terminated != nil {
-		return a.Terminated.ExitCode == b.Terminated.ExitCode &&
-			a.Terminated.Reason == b.Terminated.Reason &&
-			a.Terminated.Message == b.Terminated.Message &&
-			a.Terminated.StartedAt.Equal(&b.Terminated.StartedAt) &&
-			a.Terminated.FinishedAt.Equal(&b.Terminated.FinishedAt)
-	}
-	if a.Waiting != nil && b.Waiting != nil {
-		return a.Waiting.Reason == b.Waiting.Reason &&
-			a.Waiting.Message == b.Waiting.Message
-	}
-
-	return true
-}
-
-// getContainerPorts returns ports for a container with optimized memory usage
-func getContainerPorts(containerName string, pod *corev1.Pod) []browserv1.ContainerPort {
-	if pod.Spec.Containers == nil {
-		return []browserv1.ContainerPort{}
-	}
-
-	for _, container := range pod.Spec.Containers {
-		if container.Name == containerName && len(container.Ports) > 0 {
-			ports := make([]browserv1.ContainerPort, 0, len(container.Ports))
-			for _, port := range container.Ports {
-				ports = append(ports, browserv1.ContainerPort{
-					Name:          port.Name,
-					ContainerPort: port.ContainerPort,
-					Protocol:      port.Protocol,
-					HostPort:      port.HostPort,
-				})
-			}
-			return ports
-		}
-	}
-	return []browserv1.ContainerPort{}
 }
 
 func (r *BrowserReconciler) retryUpdate(ctx context.Context, browser *browserv1.Browser, updateFunc func(*browserv1.Browser)) error {
@@ -721,13 +646,8 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 	}
 
 	if cfg.Volumes != nil {
-		volumes := make([]corev1.Volume, 0, len(*cfg.Volumes))
-
-		for _, v := range *cfg.Volumes {
-			volume := v.DeepCopy()
-			volumes = append(volumes, *volume)
-		}
-
+		volumes := make([]corev1.Volume, len(*cfg.Volumes))
+		copy(volumes, *cfg.Volumes)
 		pod.Spec.Volumes = volumes
 	}
 
@@ -789,43 +709,38 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 
 	pod.Spec.Containers = sidecarContainers
 
-	if browser.Labels != nil {
-		if pod.Labels == nil {
-			pod.Labels = map[string]string{}
-		}
+	labelCount := len(browser.Labels)
+	if cfg.Labels != nil {
+		labelCount += len(*cfg.Labels)
+	}
+	if labelCount > 0 {
+		pod.Labels = make(map[string]string, labelCount)
 		for k, v := range browser.Labels {
 			pod.Labels[k] = v
 		}
-	}
-
-	// Pod-level fields
-	if cfg.Labels != nil {
-		if pod.Labels == nil {
-			pod.Labels = map[string]string{}
-		}
-		for k, v := range *cfg.Labels {
-			pod.Labels[k] = v
+		if cfg.Labels != nil {
+			for k, v := range *cfg.Labels {
+				pod.Labels[k] = v
+			}
 		}
 	}
 
-	if browser.Annotations != nil {
-		if pod.Annotations == nil {
-			pod.Annotations = map[string]string{}
-		}
+	annotationCount := len(browser.Annotations)
+	if cfg.Annotations != nil {
+		annotationCount += len(*cfg.Annotations)
+	}
+	if annotationCount > 0 {
+		pod.Annotations = make(map[string]string, annotationCount)
 		for k, v := range browser.Annotations {
 			if k == browserv1.SelenosisOptionsAnnotationKey {
 				continue
 			}
 			pod.Annotations[k] = v
 		}
-	}
-
-	if cfg.Annotations != nil {
-		if pod.Annotations == nil {
-			pod.Annotations = map[string]string{}
-		}
-		for k, v := range *cfg.Annotations {
-			pod.Annotations[k] = v
+		if cfg.Annotations != nil {
+			for k, v := range *cfg.Annotations {
+				pod.Annotations[k] = v
+			}
 		}
 	}
 
@@ -908,6 +823,76 @@ func applySelenosisOptions(pod *corev1.Pod, opts *SelenosisOptions) {
 			pod.Labels[k] = v
 		}
 	}
+}
+
+func getContainerPorts(containerName string, pod *corev1.Pod) []browserv1.ContainerPort {
+	if pod.Spec.Containers == nil {
+		return []browserv1.ContainerPort{}
+	}
+
+	for _, container := range pod.Spec.Containers {
+		if container.Name == containerName && len(container.Ports) > 0 {
+			ports := make([]browserv1.ContainerPort, 0, len(container.Ports))
+			for _, port := range container.Ports {
+				ports = append(ports, browserv1.ContainerPort{
+					Name:          port.Name,
+					ContainerPort: port.ContainerPort,
+					Protocol:      port.Protocol,
+					HostPort:      port.HostPort,
+				})
+			}
+			return ports
+		}
+	}
+	return nil
+}
+
+func containerStatusesEqual(a, b []browserv1.ContainerStatus) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		ai, bi := a[i], b[i]
+		if ai.Name != bi.Name || ai.Image != bi.Image || ai.RestartCount != bi.RestartCount {
+			return false
+		}
+		if !containerStateEqual(ai.State, bi.State) {
+			return false
+		}
+		if len(ai.Ports) != len(bi.Ports) {
+			return false
+		}
+		for j := range ai.Ports {
+			if ai.Ports[j] != bi.Ports[j] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func containerStateEqual(a, b corev1.ContainerState) bool {
+	if (a.Running != nil) != (b.Running != nil) ||
+		(a.Terminated != nil) != (b.Terminated != nil) ||
+		(a.Waiting != nil) != (b.Waiting != nil) {
+		return false
+	}
+	if a.Running != nil {
+		return a.Running.StartedAt.Equal(&b.Running.StartedAt)
+	}
+	if a.Terminated != nil {
+		return a.Terminated.ExitCode == b.Terminated.ExitCode &&
+			a.Terminated.Signal == b.Terminated.Signal &&
+			a.Terminated.Reason == b.Terminated.Reason &&
+			a.Terminated.Message == b.Terminated.Message &&
+			a.Terminated.StartedAt.Equal(&b.Terminated.StartedAt) &&
+			a.Terminated.FinishedAt.Equal(&b.Terminated.FinishedAt)
+	}
+	if a.Waiting != nil {
+		return a.Waiting.Reason == b.Waiting.Reason &&
+			a.Waiting.Message == b.Waiting.Message
+	}
+	return true
 }
 
 func mergeEnvVars(base []corev1.EnvVar, override map[string]string) []corev1.EnvVar {
