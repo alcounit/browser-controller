@@ -252,11 +252,17 @@ Configuration is merged in the following order (later overrides earlier):
 Rules:
 
 - `nil` fields inherit values from the template
-- Maps and lists are **merged**, not replaced
+- Maps and lists are **merged with deduplication**, not replaced — override wins on key conflict
 - Sidecars and init containers are merged by **name**
 - Environment variables are merged by **variable name**
+- Volumes are merged by **name**
+- Tolerations are merged by **key**
+- Host aliases are merged by **IP**
+- Image pull secrets are merged by **name**
+- Container ports are merged by **container port number**
+- Volume mounts are merged by **mount path**
 
-This ensures predictable and reusable configuration without duplication.
+This ensures predictable and reusable configuration without duplication or rejected Pods due to duplicate entries.
 
 ---
 
@@ -338,7 +344,11 @@ Most failure paths follow a **two-step process** across two reconcile cycles:
 | Scenario | Pod | Browser CR |
 |---|---|---|
 | No matching `BrowserConfig` | never created | set to `Failed` → next reconcile: **deleted** |
-| `podCreationTimeout` exceeded (pod stuck `Pending` > 5 min) | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
+| Pod creation blocked by `ResourceQuota` (403 Forbidden) | never created | set to `Failed / QuotaExceeded` immediately → next reconcile: **deleted** |
+| `browserPendingTimeout` exceeded (Browser stayed `Pending` without a Pod longer than the timeout) | never created | set to `Failed / PendingTimeoutExceeded` → next reconcile: **deleted** |
+| `podCreationTimeout` exceeded (pod stuck `Pending` > 5 min) — applies to both init containers and regular containers | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
+| `PodPending` + init container `Terminated` with non-zero exit code | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
+| `PodPending` + init container `Waiting` with non-transient reason (`ErrImagePull`, `ImagePullBackOff`, etc.) | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
 | `PodPending` + container `Terminated` | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
 | `PodPending` + container `Waiting` with non-transient reason (`CrashLoopBackOff`, `ErrImagePull`, `ImagePullBackOff`, etc.) | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
 | Pod phase `Failed` | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
@@ -355,12 +365,46 @@ Every failure path writes a human-readable message to `Browser.status.message` b
 | Cause | Example message |
 |---|---|
 | No `BrowserConfig` | `Browser configuration not found` |
+| Quota exceeded | `pods "b1" is forbidden: exceeded quota: ...` |
+| Pending timeout exceeded | `Browser did not start within 5m0s` |
 | Creation timeout | `pod creation timeout exceeded after 5m0s, container browser: ContainerCreating` |
+| Init container creation timeout | `pod creation timeout exceeded after 5m0s, init container init-setup: PodInitializing` |
+| Init container terminated | `pod init container init-setup terminated: Error (exit code 1)` |
+| Init container not ready | `Browser pod init container init-setup failed: ImagePullBackOff - back-off pulling image` |
 | Container terminated | `pod container browser terminated: OOMKilled (exit code 137)` |
 | Container not ready | `pod container browser failed: CrashLoopBackOff - back-off restarting failed container` |
 | Pod failed | `pod has failed with reason: OOMKilled - container exceeded memory limit` |
 
 This message is available in `Browser.status` until the CR is removed and is propagated as an SSE event by `browser-service`, making it observable to clients before the CR disappears.
+
+---
+
+## Configuration Flags
+
+The controller binary accepts the following flags:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--metrics-addr` | `:8080` | Address the metrics endpoint binds to |
+| `--health-probe-bind-address` | `:8081` | Address the health/readiness probe binds to |
+| `--enable-leader-election` | `false` | Enable leader election for HA deployments |
+| `--browser-pod-creation-timeout` | `5m` | How long the controller waits for a new Pod to leave `Pending` before force-deleting it and marking the `Browser` as `Failed` |
+| `--browser-pod-deletion-timeout` | `5m` | How long the controller waits for a Pod to finish terminating before issuing a force-delete |
+| `--browser-pending-timeout` | `0` (disabled) | How long a `Browser` may stay in `Pending` without an associated Pod before being marked `Failed / PendingTimeoutExceeded`. Useful when Pod creation is blocked by `ResourceQuota` and the backlog needs a deterministic cap. Set to `0` to disable. |
+| `--max-retries` | `3` | Max retries for conflict resolution on Browser status updates |
+| `--max-workers` | `4` | Max concurrent reconcile workers for the Browser controller |
+| `--rate-limiter-base-delay` | `100ms` | Base delay for the exponential failure rate limiter |
+| `--rate-limiter-max-delay` | `30s` | Max delay for the exponential failure rate limiter |
+
+---
+
+### `--browser-pending-timeout` in detail
+
+When the cluster runs out of Pod quota (or another admission plugin blocks Pod creation), the controller keeps retrying and the `Browser` CR stays in `Pending` indefinitely. `--browser-pending-timeout` gives the controller a deterministic deadline: if a `Browser` CR has lived without a Pod for longer than the configured duration, the next reconcile marks it `Failed` with reason `PendingTimeoutExceeded` and message `Browser did not start within <timeout>`. On the following reconcile the standard failure path removes the CR.
+
+The timeout is measured against `Browser.metadata.creationTimestamp`, not the time the controller first saw the CR, so a restart of the controller does not reset the window.
+
+The default is `0`, which disables the timeout entirely and preserves the previous behavior of retrying forever.
 
 ---
 

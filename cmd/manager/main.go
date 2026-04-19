@@ -33,12 +33,22 @@ func init() {
 }
 
 func main() {
-	var metricsAddr string
-	var enableLeaderElection bool
-	var probeAddr string
+	var (
+		metricsAddr          string
+		enableLeaderElection bool
+		probeAddr            string
+		reconcilerCfg        browser.ReconcilerConfig
+	)
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.DurationVar(&reconcilerCfg.PodCreationTimeout, "browser-pod-creation-timeout", time.Minute*5, "The timeout for browser pod creation.")
+	flag.DurationVar(&reconcilerCfg.PodDeletionTimeout, "browser-pod-deletion-timeout", time.Minute*5, "The timeout for browser pod deletion.")
+	flag.DurationVar(&reconcilerCfg.PendingTimeout, "browser-pending-timeout", 0, "Max time a Browser can stay Pending without a Pod (0 = disabled).")
+	flag.IntVar(&reconcilerCfg.MaxRetries, "max-retries", 3, "Max retries for conflict resolution on Browser status updates.")
+	flag.IntVar(&reconcilerCfg.MaxWorkers, "max-workers", 4, "Max concurrent reconcile workers for the Browser controller.")
+	flag.DurationVar(&reconcilerCfg.RateLimiterBaseDelay, "rate-limiter-base-delay", 100*time.Millisecond, "Base delay for the exponential failure rate limiter.")
+	flag.DurationVar(&reconcilerCfg.RateLimiterMaxDelay, "rate-limiter-max-delay", 30*time.Second, "Max delay for the exponential failure rate limiter.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager.")
 	flag.Parse()
@@ -88,7 +98,7 @@ func main() {
 	}
 
 	// Add Browser controller
-	browserCtrl := browser.NewBrowserReconciler(mgr.GetClient(), browserCfgStore, mgr.GetScheme())
+	browserCtrl := browser.NewBrowserReconciler(mgr.GetClient(), browserCfgStore, mgr.GetScheme(), reconcilerCfg)
 	if err = browserCtrl.SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create browser controller")
 		os.Exit(1)

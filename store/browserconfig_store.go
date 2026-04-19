@@ -102,15 +102,24 @@ func (s *BrowserConfigStore) onAddOrUpdate(oldObj, newObj any, log logr.Logger) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	copy := new.DeepCopy()
-	copy.Spec.MergeWithTemplate()
+	if old != nil {
+		for browserName, versions := range old.Spec.Browsers {
+			for version := range versions {
+				key := keyFor(old.Namespace, browserName, version)
+				delete(s.config, key)
+			}
+		}
+	}
 
-	for browserName, versions := range copy.Spec.Browsers {
+	cp := new.DeepCopy()
+	cp.Spec.MergeWithTemplate()
+
+	for browserName, versions := range cp.Spec.Browsers {
 		for version, cfg := range versions {
 			if cfg == nil {
 				continue
 			}
-			key := keyFor(copy.Namespace, browserName, version)
+			key := keyFor(cp.Namespace, browserName, version)
 			s.config[key] = cfg
 			log.Info("BrowserConfig added/updated", "key", key)
 		}
@@ -146,6 +155,17 @@ func (s *BrowserConfigStore) onDelete(obj any, log logr.Logger) {
 	}
 }
 
+func (s *BrowserConfigStore) DeleteConfig(namespace string, browsers map[string]map[string]*configv1.BrowserVersionConfigSpec) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for browserName, versions := range browsers {
+		for version := range versions {
+			delete(s.config, keyFor(namespace, browserName, version))
+		}
+	}
+}
+
 // Get retrieves BrowserVersionConfig from the in-memory store.
 func (s *BrowserConfigStore) Get(namespace, browserName, version string) (*configv1.BrowserVersionConfigSpec, bool) {
 	s.mu.RLock()
@@ -155,5 +175,5 @@ func (s *BrowserConfigStore) Get(namespace, browserName, version string) (*confi
 		return nil, false
 	}
 
-	return cfg.DeepCopy(), exists
+	return cfg, true
 }

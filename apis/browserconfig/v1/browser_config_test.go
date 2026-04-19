@@ -472,6 +472,122 @@ func TestMergeContainerPortPtrAndMergeVolumeMountPtr(t *testing.T) {
 	}
 }
 
+func TestMergeVolumePtrDedupsByName(t *testing.T) {
+	template := []corev1.Volume{
+		{Name: "shared", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "template-only"},
+	}
+	override := []corev1.Volume{
+		{Name: "shared", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/data"}}},
+		{Name: "override-only"},
+	}
+
+	merged := mergeVolumePtr(&template, &override)
+	if merged == nil || len(*merged) != 3 {
+		t.Fatalf("expected 3 volumes after dedup, got %d", len(*merged))
+	}
+	for _, v := range *merged {
+		if v.Name == "shared" && v.HostPath == nil {
+			t.Fatalf("expected override to win for shared volume")
+		}
+	}
+}
+
+func TestMergeTolerationPtrDedupsByKey(t *testing.T) {
+	template := []corev1.Toleration{
+		{Key: "shared", Value: "template", Effect: corev1.TaintEffectNoSchedule},
+		{Key: "template-only"},
+	}
+	override := []corev1.Toleration{
+		{Key: "shared", Value: "override", Effect: corev1.TaintEffectNoExecute},
+		{Key: "override-only"},
+	}
+
+	merged := mergeTolerationPtr(&template, &override)
+	if merged == nil || len(*merged) != 3 {
+		t.Fatalf("expected 3 tolerations after dedup, got %d", len(*merged))
+	}
+	for _, tol := range *merged {
+		if tol.Key == "shared" && tol.Value != "override" {
+			t.Fatalf("expected override to win for shared toleration key")
+		}
+	}
+}
+
+func TestMergeHostAliasPtrDedupsByIP(t *testing.T) {
+	template := []corev1.HostAlias{
+		{IP: "10.0.0.1", Hostnames: []string{"template-host"}},
+		{IP: "10.0.0.2", Hostnames: []string{"template-only"}},
+	}
+	override := []corev1.HostAlias{
+		{IP: "10.0.0.1", Hostnames: []string{"override-host"}},
+		{IP: "10.0.0.3", Hostnames: []string{"override-only"}},
+	}
+
+	merged := mergeHostAliasPtr(&template, &override)
+	if merged == nil || len(*merged) != 3 {
+		t.Fatalf("expected 3 hostAliases after dedup, got %d", len(*merged))
+	}
+	for _, h := range *merged {
+		if h.IP == "10.0.0.1" && h.Hostnames[0] != "override-host" {
+			t.Fatalf("expected override to win for shared IP")
+		}
+	}
+}
+
+func TestMergeLocalObjectRefPtrDedupsByName(t *testing.T) {
+	template := []corev1.LocalObjectReference{{Name: "shared"}, {Name: "template-only"}}
+	override := []corev1.LocalObjectReference{{Name: "shared"}, {Name: "override-only"}}
+
+	merged := mergeLocalObjectRefPtr(&template, &override)
+	if merged == nil || len(*merged) != 3 {
+		t.Fatalf("expected 3 refs after dedup, got %d", len(*merged))
+	}
+}
+
+func TestMergeContainerPortPtrDedupsByPort(t *testing.T) {
+	template := []corev1.ContainerPort{{Name: "http", ContainerPort: 80}, {ContainerPort: 9090}}
+	override := []corev1.ContainerPort{{Name: "http-override", ContainerPort: 80}, {ContainerPort: 443}}
+
+	merged := mergeContainerPortPtr(&template, &override)
+	if merged == nil || len(*merged) != 3 {
+		t.Fatalf("expected 3 ports after dedup, got %d", len(*merged))
+	}
+	for _, p := range *merged {
+		if p.ContainerPort == 80 && p.Name != "http-override" {
+			t.Fatalf("expected override to win for port 80")
+		}
+	}
+}
+
+func TestMergeVolumeMountsPtrDedupsByMountPath(t *testing.T) {
+	template := []corev1.VolumeMount{{Name: "vol-a", MountPath: "/shared"}, {Name: "vol-b", MountPath: "/template"}}
+	override := []corev1.VolumeMount{{Name: "vol-c", MountPath: "/shared"}, {Name: "vol-d", MountPath: "/override"}}
+
+	merged := mergeVolumeMountsPtr(&template, &override)
+	if merged == nil || len(*merged) != 3 {
+		t.Fatalf("expected 3 mounts after dedup, got %d", len(*merged))
+	}
+	for _, m := range *merged {
+		if m.MountPath == "/shared" && m.Name != "vol-c" {
+			t.Fatalf("expected override to win for mount path /shared")
+		}
+	}
+}
+
+func TestMergeVolumeMountPtrDedupsByMountPath(t *testing.T) {
+	template := []corev1.VolumeMount{{Name: "vol-a", MountPath: "/shared"}}
+	override := []corev1.VolumeMount{{Name: "vol-b", MountPath: "/shared"}}
+
+	merged := mergeVolumeMountPtr(&template, &override)
+	if merged == nil || len(*merged) != 1 {
+		t.Fatalf("expected 1 mount after dedup, got %d", len(*merged))
+	}
+	if (*merged)[0].Name != "vol-b" {
+		t.Fatalf("expected override to win, got %q", (*merged)[0].Name)
+	}
+}
+
 func strPtr(v string) *string {
 	return &v
 }

@@ -322,54 +322,102 @@ func firstNonNilResource(template, override *corev1.ResourceRequirements) *corev
 }
 
 func mergeVolumePtr(template, override *[]corev1.Volume) *[]corev1.Volume {
-	result := []corev1.Volume{}
-	if template != nil {
-		result = append(result, *template...)
-	}
-
-	if override != nil {
-		result = append(result, *override...)
-	}
-
-	if len(result) == 0 {
+	if template == nil && override == nil {
 		return nil
 	}
 
-	return &result
+	index := make(map[string]int)
+	merged := make([]corev1.Volume, 0)
+
+	if template != nil {
+		for _, v := range *template {
+			index[v.Name] = len(merged)
+			merged = append(merged, v)
+		}
+	}
+
+	if override != nil {
+		for _, v := range *override {
+			if i, exists := index[v.Name]; exists {
+				merged[i] = v
+			} else {
+				index[v.Name] = len(merged)
+				merged = append(merged, v)
+			}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	return &merged
 }
 
 func mergeTolerationPtr(template, override *[]corev1.Toleration) *[]corev1.Toleration {
-	result := []corev1.Toleration{}
-	if template != nil {
-		result = append(result, *template...)
-	}
-
-	if override != nil {
-		result = append(result, *override...)
-	}
-
-	if len(result) == 0 {
+	if template == nil && override == nil {
 		return nil
 	}
 
-	return &result
+	index := make(map[string]int)
+	merged := make([]corev1.Toleration, 0)
+
+	if template != nil {
+		for _, t := range *template {
+			index[t.Key] = len(merged)
+			merged = append(merged, t)
+		}
+	}
+
+	if override != nil {
+		for _, t := range *override {
+			if i, exists := index[t.Key]; exists {
+				merged[i] = t
+			} else {
+				index[t.Key] = len(merged)
+				merged = append(merged, t)
+			}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	return &merged
 }
 
 func mergeHostAliasPtr(template, override *[]corev1.HostAlias) *[]corev1.HostAlias {
-	result := []corev1.HostAlias{}
-	if template != nil {
-		result = append(result, *template...)
-	}
-
-	if override != nil {
-		result = append(result, *override...)
-	}
-
-	if len(result) == 0 {
+	if template == nil && override == nil {
 		return nil
 	}
 
-	return &result
+	index := make(map[string]int)
+	merged := make([]corev1.HostAlias, 0)
+
+	if template != nil {
+		for _, h := range *template {
+			index[h.IP] = len(merged)
+			merged = append(merged, h)
+		}
+	}
+
+	if override != nil {
+		for _, h := range *override {
+			if i, exists := index[h.IP]; exists {
+				merged[i] = h
+			} else {
+				index[h.IP] = len(merged)
+				merged = append(merged, h)
+			}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	return &merged
 }
 
 func mergeSidecarPtr(template, override *[]Sidecar) *[]Sidecar {
@@ -399,44 +447,71 @@ func mergeSidecarPtr(template, override *[]Sidecar) *[]Sidecar {
 }
 
 func mergeVolumeMountsPtr(template, override *[]corev1.VolumeMount) *[]corev1.VolumeMount {
-	result := []corev1.VolumeMount{}
+	if template == nil && override == nil {
+		return nil
+	}
+
+	index := make(map[string]int)
+	merged := make([]corev1.VolumeMount, 0)
 
 	if template != nil {
 		for _, t := range *template {
-			copy := t.DeepCopy()
-			result = append(result, *copy)
+			cp := t.DeepCopy()
+			index[cp.MountPath] = len(merged)
+			merged = append(merged, *cp)
 		}
 	}
 
 	if override != nil {
 		for _, o := range *override {
-			copy := o.DeepCopy()
-			result = append(result, *copy)
+			cp := o.DeepCopy()
+			if i, exists := index[cp.MountPath]; exists {
+				merged[i] = *cp
+			} else {
+				index[cp.MountPath] = len(merged)
+				merged = append(merged, *cp)
+			}
 		}
 	}
 
-	if len(result) == 0 {
+	if len(merged) == 0 {
 		return nil
 	}
 
-	return &result
+	return &merged
 }
 
 func mergeLocalObjectRefPtr(template, override *[]corev1.LocalObjectReference) *[]corev1.LocalObjectReference {
-	result := []corev1.LocalObjectReference{}
-	if template != nil {
-		result = append(result, *template...)
-	}
-
-	if override != nil {
-		result = append(result, *override...)
-	}
-
-	if len(result) == 0 {
+	if template == nil && override == nil {
 		return nil
 	}
 
-	return &result
+	seen := make(map[string]int)
+	merged := make([]corev1.LocalObjectReference, 0)
+
+	if template != nil {
+		for _, r := range *template {
+			seen[r.Name] = len(merged)
+			merged = append(merged, r)
+		}
+	}
+
+	if override != nil {
+		for _, r := range *override {
+			if i, exists := seen[r.Name]; exists {
+				merged[i] = r
+			} else {
+				seen[r.Name] = len(merged)
+				merged = append(merged, r)
+			}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	return &merged
 }
 
 func (s *Sidecar) mergeWithTemplate(t *Sidecar) {
@@ -458,37 +533,69 @@ func (s *Sidecar) mergeWithTemplate(t *Sidecar) {
 }
 
 func mergeContainerPortPtr(template, override *[]corev1.ContainerPort) *[]corev1.ContainerPort {
-	result := []corev1.ContainerPort{}
-	if template != nil {
-		result = append(result, *template...)
-	}
-
-	if override != nil {
-		result = append(result, *override...)
-	}
-
-	if len(result) == 0 {
+	if template == nil && override == nil {
 		return nil
 	}
 
-	return &result
+	index := make(map[int32]int)
+	merged := make([]corev1.ContainerPort, 0)
+
+	if template != nil {
+		for _, p := range *template {
+			index[p.ContainerPort] = len(merged)
+			merged = append(merged, p)
+		}
+	}
+
+	if override != nil {
+		for _, p := range *override {
+			if i, exists := index[p.ContainerPort]; exists {
+				merged[i] = p
+			} else {
+				index[p.ContainerPort] = len(merged)
+				merged = append(merged, p)
+			}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	return &merged
 }
 
 func mergeVolumeMountPtr(template, override *[]corev1.VolumeMount) *[]corev1.VolumeMount {
-	result := []corev1.VolumeMount{}
-	if template != nil {
-		result = append(result, *template...)
-	}
-
-	if override != nil {
-		result = append(result, *override...)
-	}
-
-	if len(result) == 0 {
+	if template == nil && override == nil {
 		return nil
 	}
 
-	return &result
+	index := make(map[string]int)
+	merged := make([]corev1.VolumeMount, 0)
+
+	if template != nil {
+		for _, m := range *template {
+			index[m.MountPath] = len(merged)
+			merged = append(merged, m)
+		}
+	}
+
+	if override != nil {
+		for _, m := range *override {
+			if i, exists := index[m.MountPath]; exists {
+				merged[i] = m
+			} else {
+				index[m.MountPath] = len(merged)
+				merged = append(merged, m)
+			}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	return &merged
 }
 
 func findTemplateSidecar(template *[]Sidecar, name string) *Sidecar {
