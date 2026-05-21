@@ -372,8 +372,8 @@ Every failure path writes a human-readable message to `Browser.status.message` b
 | Init container terminated | `pod init container init-setup terminated: Error (exit code 1)` |
 | Init container not ready | `Browser pod init container init-setup failed: ImagePullBackOff - back-off pulling image` |
 | Container terminated | `pod container browser terminated: OOMKilled (exit code 137)` |
-| Container not ready | `pod container browser failed: CrashLoopBackOff - back-off restarting failed container` |
-| Pod failed | `pod has failed with reason: OOMKilled - container exceeded memory limit` |
+| Container not ready | `Browser pod container browser failed: CrashLoopBackOff - back-off restarting failed container` |
+| Pod failed | `Browser pod has failed with reason: OOMKilled - container exceeded memory limit` |
 
 This message is available in `Browser.status` until the CR is removed and is propagated as an SSE event by `browser-service`, making it observable to clients before the CR disappears.
 
@@ -391,7 +391,7 @@ The controller binary accepts the following flags:
 | `--browser-pod-creation-timeout` | `5m` | How long the controller waits for a new Pod to leave `Pending` before force-deleting it and marking the `Browser` as `Failed` |
 | `--browser-pod-deletion-timeout` | `5m` | How long the controller waits for a Pod to finish terminating before issuing a force-delete |
 | `--browser-pending-timeout` | `0` (disabled) | How long a `Browser` may stay in `Pending` without an associated Pod before being marked `Failed / PendingTimeoutExceeded`. Useful when Pod creation is blocked by `ResourceQuota` and the backlog needs a deterministic cap. Set to `0` to disable. |
-| `--max-retries` | `3` | Max retries for conflict resolution on Browser status updates |
+| `--max-retries` | `3` | Max retries for conflict resolution on Browser patch and status updates |
 | `--max-workers` | `4` | Max concurrent reconcile workers for the Browser controller |
 | `--rate-limiter-base-delay` | `100ms` | Base delay for the exponential failure rate limiter |
 | `--rate-limiter-max-delay` | `30s` | Max delay for the exponential failure rate limiter |
