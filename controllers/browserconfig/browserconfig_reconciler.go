@@ -102,12 +102,14 @@ func (r *BrowserConfigReconciler) retryPatch(ctx context.Context, bc *configv1.B
 			return err
 		}
 
-		base := time.Millisecond * time.Duration(100*(1<<i))
+		base := time.Millisecond * time.Duration(100*(1<<min(i, 10)))
 		j := time.Duration(rand.Int64N(int64(50 * time.Millisecond)))
+		t := time.NewTimer(base + j)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return ctx.Err()
-		case <-time.After(base + j):
+		case <-t.C:
 		}
 	}
 

@@ -1872,6 +1872,144 @@ func TestReconcileDeletionTimestamp(t *testing.T) {
 	}
 }
 
+type conflictPatchClient struct {
+	client.Client
+	patchCalls int
+	failCount  int
+}
+
+func (c *conflictPatchClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	c.patchCalls++
+	if c.patchCalls <= c.failCount {
+		return apierrors.NewConflict(schema.GroupResource{Resource: "browsers"}, obj.GetName(), errors.New("conflict"))
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+type conflictStatusPatchClient struct {
+	client.Client
+	statusPatchCalls int
+	statusFailCount  int
+}
+
+func (c *conflictStatusPatchClient) Status() client.StatusWriter {
+	return &conflictStatusPatchWriter{
+		StatusWriter: c.Client.Status(),
+		calls:        &c.statusPatchCalls,
+		failCount:    c.statusFailCount,
+	}
+}
+
+type conflictStatusPatchWriter struct {
+	client.StatusWriter
+	calls     *int
+	failCount int
+}
+
+func (w *conflictStatusPatchWriter) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+	*w.calls++
+	if *w.calls <= w.failCount {
+		return apierrors.NewConflict(schema.GroupResource{Resource: "browsers"}, obj.GetName(), errors.New("conflict"))
+	}
+	return w.StatusWriter.Patch(ctx, obj, patch, opts...)
+}
+
+// ───────── retryBackoff ─────────
+
+func TestRetryBackoffContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	retryBackoff(ctx, 0)
+	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+		t.Fatalf("retryBackoff took %v on cancelled context, expected < 50ms", elapsed)
+	}
+}
+
+func TestRetryBackoffLargeAttemptNoPanic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	retryBackoff(ctx, 100) // overflowed int without min(attempt, 10) guard
+}
+
+// ───────── retryUpdate / retryPatch conflict ─────────
+
+func TestRetryUpdateConflictRetry(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	brw := &browserv1.Browser{ObjectMeta: metav1.ObjectMeta{Name: "b1", Namespace: "ns"}}
+	base := newBrowserClient(scheme, brw)
+	cc := &conflictPatchClient{Client: base, failCount: 1}
+	r := NewBrowserReconciler(cc, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	err := r.retryUpdate(context.Background(), brw, func(b *browserv1.Browser) {
+		if b.Labels == nil {
+			b.Labels = map[string]string{}
+		}
+		b.Labels["k"] = "v"
+	})
+	if err != nil {
+		t.Fatalf("expected success after conflict retry, got %v", err)
+	}
+	if cc.patchCalls < 2 {
+		t.Fatalf("expected at least 2 patch calls, got %d", cc.patchCalls)
+	}
+}
+
+func TestRetryUpdateConflictExhausted(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	brw := &browserv1.Browser{ObjectMeta: metav1.ObjectMeta{Name: "b1", Namespace: "ns"}}
+	base := newBrowserClient(scheme, brw)
+	cc := &conflictPatchClient{Client: base, failCount: defaultCfg.MaxRetries + 1}
+	r := NewBrowserReconciler(cc, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	err := r.retryUpdate(context.Background(), brw, func(*browserv1.Browser) {})
+	if err == nil {
+		t.Fatalf("expected error after exhausting retries")
+	}
+	if cc.patchCalls != defaultCfg.MaxRetries {
+		t.Fatalf("expected %d patch calls, got %d", defaultCfg.MaxRetries, cc.patchCalls)
+	}
+}
+
+func TestRetryStatusUpdateConflictRetry(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	brw := &browserv1.Browser{ObjectMeta: metav1.ObjectMeta{Name: "b1", Namespace: "ns"}}
+	base := newBrowserClient(scheme, brw)
+	cc := &conflictStatusPatchClient{Client: base, statusFailCount: 1}
+	r := NewBrowserReconciler(cc, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	err := r.retryStatusUpdate(context.Background(), brw, func(b *browserv1.Browser) {
+		b.Status.Phase = corev1.PodRunning
+	})
+	if err != nil {
+		t.Fatalf("expected success after conflict retry, got %v", err)
+	}
+	if cc.statusPatchCalls < 2 {
+		t.Fatalf("expected at least 2 status patch calls, got %d", cc.statusPatchCalls)
+	}
+}
+
+func TestRetryPatchContextCancelledDuringBackoff(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	brw := &browserv1.Browser{ObjectMeta: metav1.ObjectMeta{Name: "b1", Namespace: "ns"}}
+	base := newBrowserClient(scheme, brw)
+	cc := &conflictPatchClient{Client: base, failCount: defaultCfg.MaxRetries + 1}
+	r := NewBrowserReconciler(cc, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	err := r.retryUpdate(ctx, brw, func(*browserv1.Browser) {})
+	if err == nil {
+		t.Fatalf("expected error from cancelled context")
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("retryUpdate took %v on cancelled context, expected < 200ms", elapsed)
+	}
+}
+
 func TestReconcileFinalizerAddError(t *testing.T) {
 	scheme := newBrowserScheme(t)
 	brw := &browserv1.Browser{

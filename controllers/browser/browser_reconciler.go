@@ -215,6 +215,7 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Check pod InitContainerStatuses, delete pod and Browser if containers failed or timeouts exceeded
 	if pod.Status.Phase == corev1.PodPending {
 
+		podAge := time.Since(pod.CreationTimestamp.Time)
 		for _, cs := range pod.Status.InitContainerStatuses {
 			if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
 				log.Info("Browser pod init container terminated",
@@ -238,7 +239,6 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 			if cs.State.Waiting != nil {
 				if !pod.CreationTimestamp.IsZero() {
-					podAge := time.Since(pod.CreationTimestamp.Time)
 					if podAge > r.cfg.PodCreationTimeout {
 						log.Info("Browser pod creation timeout exceeded on init container", "age", podAge.String(), "podStatus", pod.Status.Phase, "container", cs.Name)
 						if err := r.deletePod(ctx, pod); err != nil {
@@ -299,7 +299,6 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 			if cs.State.Waiting != nil {
 				if !pod.CreationTimestamp.IsZero() {
-					podAge := time.Since(pod.CreationTimestamp.Time)
 					if podAge > r.cfg.PodCreationTimeout {
 						log.Info("Browser pod creation timeout exceeded", "age", podAge.String(), "podStatus", pod.Status.Phase, "container", cs.Name)
 						if err := r.deletePod(ctx, pod); err != nil {
@@ -409,10 +408,11 @@ func (r *BrowserReconciler) deletePod(ctx context.Context, pod *corev1.Pod) erro
 	log := logger.FromContext(ctx)
 
 	if err := r.client.Delete(ctx, pod, client.GracePeriodSeconds(0)); err != nil {
-		if !errors.IsNotFound(err) {
-			log.Error(err, "failed to force delete Browser pod")
-			return err
+		if errors.IsNotFound(err) {
+			return nil
 		}
+		log.Error(err, "failed to force delete Browser pod")
+		return err
 	}
 
 	log.Info("Browser pod forcibly deleted")
@@ -566,10 +566,11 @@ func (r *BrowserReconciler) updateBrowserStatus(ctx context.Context, browser *br
 
 	containersStatusChanged := false
 
-	newContainerStatuses := make([]browserv1.ContainerStatus, 0, len(pod.Status.ContainerStatuses))
+	var newContainerStatuses []browserv1.ContainerStatus
 
 	// Efficiently collect container statuses
 	if len(pod.Status.ContainerStatuses) > 0 {
+		newContainerStatuses = make([]browserv1.ContainerStatus, 0, len(pod.Status.ContainerStatuses))
 		for _, containerStatus := range pod.Status.ContainerStatuses {
 			status := browserv1.ContainerStatus{
 				Name:         containerStatus.Name,
@@ -607,38 +608,23 @@ func (r *BrowserReconciler) updateBrowserStatus(ctx context.Context, browser *br
 	return ctrl.Result{}, nil
 }
 
-func (r *BrowserReconciler) retryUpdate(ctx context.Context, browser *browserv1.Browser, updateFunc func(*browserv1.Browser)) error {
-	namespacedName := types.NamespacedName{
-		Name:      browser.Name,
-		Namespace: browser.Namespace,
-	}
-
-	for i := range r.cfg.MaxRetries {
-		current := &browserv1.Browser{}
-		if err := r.client.Get(ctx, namespacedName, current); err != nil {
-			return err
-		}
-
-		before := current.DeepCopy()
-		updateFunc(current)
-
-		patch := client.MergeFrom(before)
-		err := r.client.Patch(ctx, current, patch)
-		if err == nil {
-			return nil
-		}
-
-		if !errors.IsConflict(err) {
-			return err
-		}
-
-		retryBackoff(ctx, i)
-	}
-
-	return fmt.Errorf("failed to patch Browser after %d attempts: version conflict", r.cfg.MaxRetries)
+func (r *BrowserReconciler) retryUpdate(ctx context.Context, browser *browserv1.Browser, updateFn func(*browserv1.Browser)) error {
+	return r.retryPatch(ctx, browser, updateFn,
+		func(ctx context.Context, obj client.Object, patch client.Patch) error {
+			return r.client.Patch(ctx, obj, patch)
+		},
+		"failed to patch Browser")
 }
 
-func (r *BrowserReconciler) retryStatusUpdate(ctx context.Context, browser *browserv1.Browser, updateFunc func(*browserv1.Browser)) error {
+func (r *BrowserReconciler) retryStatusUpdate(ctx context.Context, browser *browserv1.Browser, updateFn func(*browserv1.Browser)) error {
+	return r.retryPatch(ctx, browser, updateFn,
+		func(ctx context.Context, obj client.Object, patch client.Patch) error {
+			return r.client.Status().Patch(ctx, obj, patch)
+		},
+		"failed to patch Browser status")
+}
+
+func (r *BrowserReconciler) retryPatch(ctx context.Context, browser *browserv1.Browser, updateFn func(*browserv1.Browser), patchFn func(context.Context, client.Object, client.Patch) error, errMsg string) error {
 	namespacedName := types.NamespacedName{
 		Name:      browser.Name,
 		Namespace: browser.Namespace,
@@ -651,10 +637,10 @@ func (r *BrowserReconciler) retryStatusUpdate(ctx context.Context, browser *brow
 		}
 
 		before := current.DeepCopy()
-		updateFunc(current)
+		updateFn(current)
 
 		patch := client.MergeFrom(before)
-		err := r.client.Status().Patch(ctx, current, patch)
+		err := patchFn(ctx, current, patch)
 		if err == nil {
 			return nil
 		}
@@ -665,16 +651,17 @@ func (r *BrowserReconciler) retryStatusUpdate(ctx context.Context, browser *brow
 
 		retryBackoff(ctx, i)
 	}
-
-	return fmt.Errorf("failed to patch Browser status after %d attempts: version conflict", r.cfg.MaxRetries)
+	return fmt.Errorf("%s after %d attempts: version conflict", errMsg, r.cfg.MaxRetries)
 }
 
 func retryBackoff(ctx context.Context, attempt int) {
-	base := time.Millisecond * time.Duration(100*(1<<attempt))
+	base := time.Millisecond * time.Duration(100*(1<<min(attempt, 10)))
 	j := time.Duration(rand.Int64N(int64(50 * time.Millisecond)))
+	t := time.NewTimer(base + j)
+	defer t.Stop()
 	select {
 	case <-ctx.Done():
-	case <-time.After(base + j):
+	case <-t.C:
 	}
 }
 

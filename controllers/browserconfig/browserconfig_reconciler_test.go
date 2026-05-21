@@ -306,3 +306,30 @@ func TestReconcileRemoveFinalizerPatchError(t *testing.T) {
 		t.Fatalf("expected short retry, got %v", res.RequeueAfter)
 	}
 }
+
+func TestRetryPatchContextCancelledDuringBackoff(t *testing.T) {
+	scheme := newTestScheme(t)
+	cfg := &configv1.BrowserConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"},
+		Spec: configv1.BrowserConfigSpec{
+			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
+				"chrome": {"120": {Image: "img"}},
+			},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
+	cc := &conflictClient{Client: base, failCount: maxRetries + 1}
+	r := NewBrowserConfigReconciler(cc, scheme)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	err := r.retryPatch(ctx, cfg, func(*configv1.BrowserConfig) {})
+	if err == nil {
+		t.Fatalf("expected error from cancelled context")
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("retryPatch took %v on cancelled context, expected < 200ms", elapsed)
+	}
+}
