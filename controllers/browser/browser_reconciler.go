@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -19,10 +20,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	logger "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 const (
@@ -86,7 +90,7 @@ func NewBrowserReconciler(client client.Client, config *store.BrowserConfigStore
 func (r *BrowserReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&browserv1.Browser{}).
-		Owns(&corev1.Pod{}).
+		Owns(&corev1.Pod{}, builder.WithPredicates(podChangedPredicate{})).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: r.cfg.MaxWorkers,
 			RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request](
@@ -684,6 +688,27 @@ func (r *BrowserReconciler) deleteBrowser(ctx context.Context, browser *browserv
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+type podChangedPredicate struct {
+	predicate.Funcs
+}
+
+func (podChangedPredicate) Update(e event.UpdateEvent) bool {
+	oldPod, ok := e.ObjectOld.(*corev1.Pod)
+	if !ok {
+		return true
+	}
+	newPod, ok := e.ObjectNew.(*corev1.Pod)
+	if !ok {
+		return true
+	}
+	return oldPod.Status.Phase != newPod.Status.Phase ||
+		oldPod.Status.PodIP != newPod.Status.PodIP ||
+		!oldPod.Status.StartTime.Equal(newPod.Status.StartTime) ||
+		!reflect.DeepEqual(oldPod.Status.ContainerStatuses, newPod.Status.ContainerStatuses) ||
+		!reflect.DeepEqual(oldPod.Status.InitContainerStatuses, newPod.Status.InitContainerStatuses) ||
+		!oldPod.DeletionTimestamp.Equal(newPod.DeletionTimestamp)
 }
 
 func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionConfigSpec, opts *SelenosisOptions) *corev1.Pod {

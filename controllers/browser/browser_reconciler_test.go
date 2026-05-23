@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
 var defaultCfg = ReconcilerConfig{
@@ -3294,5 +3295,188 @@ func TestRetryStatusUpdateMaxConflict(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestContainerStatusesEqualPorts(t *testing.T) {
+	withPorts := func(ports []browserv1.ContainerPort) []browserv1.ContainerStatus {
+		return []browserv1.ContainerStatus{{Name: "c", Ports: ports}}
+	}
+
+	p1 := []browserv1.ContainerPort{{ContainerPort: 4444}}
+	p2 := []browserv1.ContainerPort{{ContainerPort: 4445}}
+	p3 := []browserv1.ContainerPort{{ContainerPort: 4444}, {ContainerPort: 5555}}
+
+	if !containerStatusesEqual(withPorts(p1), withPorts(p1)) {
+		t.Fatal("expected equal ports to be equal")
+	}
+	if containerStatusesEqual(withPorts(p1), withPorts(p3)) {
+		t.Fatal("expected different port count to be unequal")
+	}
+	if containerStatusesEqual(withPorts(p1), withPorts(p2)) {
+		t.Fatal("expected different port values to be unequal")
+	}
+}
+
+func TestContainerStateEqualWaiting(t *testing.T) {
+	a := corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "Init", Message: "msg"}}
+	b := corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "Init", Message: "msg"}}
+	c := corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "Other"}}
+
+	if !containerStateEqual(a, b) {
+		t.Fatal("expected identical waiting states to be equal")
+	}
+	if containerStateEqual(a, c) {
+		t.Fatal("expected different waiting reasons to be unequal")
+	}
+}
+
+func TestApplySelenosisOptionsNilLabels(t *testing.T) {
+	pod := &corev1.Pod{}
+	opts := &SelenosisOptions{
+		Labels: map[string]string{"env": "test"},
+	}
+	applySelenosisOptions(pod, opts)
+	if pod.Labels["env"] != "test" {
+		t.Fatalf("expected label env=test, got %v", pod.Labels)
+	}
+}
+
+func TestMergeEnvVarsEmptyOverride(t *testing.T) {
+	base := []corev1.EnvVar{{Name: "A", Value: "1"}}
+	result := mergeEnvVars(base, nil)
+	if len(result) != 1 || result[0].Name != "A" {
+		t.Fatalf("expected base unchanged, got %v", result)
+	}
+}
+
+func TestPodChangedPredicate(t *testing.T) {
+	now := metav1.Now()
+	later := metav1.NewTime(now.Add(time.Second))
+
+	basePod := func() *corev1.Pod {
+		return &corev1.Pod{
+			Status: corev1.PodStatus{
+				Phase:     corev1.PodRunning,
+				PodIP:     "10.0.0.1",
+				StartTime: &now,
+				ContainerStatuses: []corev1.ContainerStatus{
+					{Name: "browser", Ready: true},
+				},
+				InitContainerStatuses: []corev1.ContainerStatus{
+					{Name: "init", Ready: true},
+				},
+			},
+		}
+	}
+
+	p := podChangedPredicate{}
+
+	cases := []struct {
+		name string
+		old  client.Object
+		new  client.Object
+		want bool
+	}{
+		{
+			name: "no changes",
+			old:  basePod(),
+			new:  basePod(),
+			want: false,
+		},
+		{
+			name: "phase changed",
+			old:  basePod(),
+			new: func() *corev1.Pod {
+				pod := basePod()
+				pod.Status.Phase = corev1.PodFailed
+				return pod
+			}(),
+			want: true,
+		},
+		{
+			name: "pod ip changed",
+			old:  basePod(),
+			new: func() *corev1.Pod {
+				pod := basePod()
+				pod.Status.PodIP = "10.0.0.2"
+				return pod
+			}(),
+			want: true,
+		},
+		{
+			name: "start time changed",
+			old:  basePod(),
+			new: func() *corev1.Pod {
+				pod := basePod()
+				pod.Status.StartTime = &later
+				return pod
+			}(),
+			want: true,
+		},
+		{
+			name: "start time nil to non-nil",
+			old: func() *corev1.Pod {
+				pod := basePod()
+				pod.Status.StartTime = nil
+				return pod
+			}(),
+			new:  basePod(),
+			want: true,
+		},
+		{
+			name: "container statuses changed",
+			old:  basePod(),
+			new: func() *corev1.Pod {
+				pod := basePod()
+				pod.Status.ContainerStatuses[0].Ready = false
+				return pod
+			}(),
+			want: true,
+		},
+		{
+			name: "init container statuses changed",
+			old:  basePod(),
+			new: func() *corev1.Pod {
+				pod := basePod()
+				pod.Status.InitContainerStatuses[0].Ready = false
+				return pod
+			}(),
+			want: true,
+		},
+		{
+			name: "deletion timestamp set",
+			old:  basePod(),
+			new: func() *corev1.Pod {
+				pod := basePod()
+				pod.DeletionTimestamp = &now
+				return pod
+			}(),
+			want: true,
+		},
+		{
+			name: "non-pod old object",
+			old:  &corev1.ConfigMap{},
+			new:  basePod(),
+			want: true,
+		},
+		{
+			name: "non-pod new object",
+			old:  basePod(),
+			new:  &corev1.ConfigMap{},
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := p.Update(event.UpdateEvent{
+				ObjectOld: tc.old,
+				ObjectNew: tc.new,
+			})
+			if got != tc.want {
+				t.Fatalf("Update() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
