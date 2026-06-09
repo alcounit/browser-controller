@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -568,29 +567,25 @@ func (r *BrowserReconciler) updateBrowserStatus(ctx context.Context, browser *br
 	browserStatusChanged := browser.Status.Phase != pod.Status.Phase || browser.Status.PodIP != pod.Status.PodIP ||
 		(pod.Status.StartTime != nil && (browser.Status.StartTime == nil || !browser.Status.StartTime.Equal(pod.Status.StartTime)))
 
-	containersStatusChanged := false
-
-	var newContainerStatuses []browserv1.ContainerStatus
-
-	// Efficiently collect container statuses
-	if len(pod.Status.ContainerStatuses) > 0 {
-		newContainerStatuses = make([]browserv1.ContainerStatus, 0, len(pod.Status.ContainerStatuses))
-		for _, containerStatus := range pod.Status.ContainerStatuses {
-			status := browserv1.ContainerStatus{
-				Name:         containerStatus.Name,
-				State:        containerStatus.State,
-				Image:        containerStatus.Image,
-				RestartCount: containerStatus.RestartCount,
-				Ports:        getContainerPorts(containerStatus.Name, pod),
-			}
-			newContainerStatuses = append(newContainerStatuses, status)
-		}
-
-		containersStatusChanged = !containerStatusesEqual(newContainerStatuses, browser.Status.ContainerStatuses)
-	}
+	containersStatusChanged := !podStatusMatchesBrowser(
+		pod.Status.ContainerStatuses, browser.Status.ContainerStatuses)
 
 	// Update status if changed
 	if browserStatusChanged || containersStatusChanged {
+		var newContainerStatuses []browserv1.ContainerStatus
+		if containersStatusChanged && len(pod.Status.ContainerStatuses) > 0 {
+			newContainerStatuses = make([]browserv1.ContainerStatus, 0, len(pod.Status.ContainerStatuses))
+			for _, containerStatus := range pod.Status.ContainerStatuses {
+				newContainerStatuses = append(newContainerStatuses, browserv1.ContainerStatus{
+					Name:         containerStatus.Name,
+					State:        containerStatus.State,
+					Image:        containerStatus.Image,
+					RestartCount: containerStatus.RestartCount,
+					Ports:        getContainerPorts(containerStatus.Name, pod),
+				})
+			}
+		}
+
 		if err := r.retryStatusUpdate(ctx, browser, func(b *browserv1.Browser) {
 			if browserStatusChanged {
 				b.Status.PodIP = pod.Status.PodIP
@@ -706,9 +701,38 @@ func (podChangedPredicate) Update(e event.UpdateEvent) bool {
 	return oldPod.Status.Phase != newPod.Status.Phase ||
 		oldPod.Status.PodIP != newPod.Status.PodIP ||
 		!oldPod.Status.StartTime.Equal(newPod.Status.StartTime) ||
-		!reflect.DeepEqual(oldPod.Status.ContainerStatuses, newPod.Status.ContainerStatuses) ||
-		!reflect.DeepEqual(oldPod.Status.InitContainerStatuses, newPod.Status.InitContainerStatuses) ||
+		podContainerStatusesChanged(oldPod.Status.ContainerStatuses, newPod.Status.ContainerStatuses) ||
+		podContainerStatusesChanged(oldPod.Status.InitContainerStatuses, newPod.Status.InitContainerStatuses) ||
 		!oldPod.DeletionTimestamp.Equal(newPod.DeletionTimestamp)
+}
+
+func podContainerStatusesChanged(old, new []corev1.ContainerStatus) bool {
+	if len(old) != len(new) {
+		return true
+	}
+	for i := range old {
+		if old[i].Name != new[i].Name ||
+			old[i].RestartCount != new[i].RestartCount ||
+			!containerStateEqual(old[i].State, new[i].State) {
+			return true
+		}
+	}
+	return false
+}
+
+func podStatusMatchesBrowser(podStatuses []corev1.ContainerStatus, browserStatuses []browserv1.ContainerStatus) bool {
+	if len(podStatuses) != len(browserStatuses) {
+		return false
+	}
+	for i := range podStatuses {
+		if podStatuses[i].Name != browserStatuses[i].Name ||
+			podStatuses[i].Image != browserStatuses[i].Image ||
+			podStatuses[i].RestartCount != browserStatuses[i].RestartCount ||
+			!containerStateEqual(podStatuses[i].State, browserStatuses[i].State) {
+			return false
+		}
+	}
+	return true
 }
 
 func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionConfigSpec, opts *SelenosisOptions) *corev1.Pod {
@@ -747,6 +771,10 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 
 			if ic.Command != nil {
 				initContainer.Command = *ic.Command
+			}
+
+			if ic.Args != nil {
+				initContainer.Args = *ic.Args
 			}
 
 			if ic.Ports != nil {
@@ -791,6 +819,14 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 		pod.Spec.Volumes = volumes
 	}
 
+	if cfg.Command != nil {
+		browserContainer.Command = *cfg.Command
+	}
+
+	if cfg.Args != nil {
+		browserContainer.Args = *cfg.Args
+	}
+
 	if cfg.WorkingDir != nil {
 		browserContainer.WorkingDir = *cfg.WorkingDir
 	}
@@ -822,6 +858,10 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 
 			if s.Command != nil {
 				sidecar.Command = *s.Command
+			}
+
+			if s.Args != nil {
+				sidecar.Args = *s.Args
 			}
 
 			if s.Ports != nil {

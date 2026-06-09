@@ -1310,6 +1310,7 @@ func TestBuildBrowserPodWithInitContainersAndVolumes(t *testing.T) {
 func TestBuildBrowserPodInitContainerFields(t *testing.T) {
 	workDir := "/work"
 	cmd := []string{"sh"}
+	args := []string{"-c"}
 	ports := []corev1.ContainerPort{{ContainerPort: 8080}}
 	env := []corev1.EnvVar{{Name: "A", Value: "B"}}
 	mounts := []corev1.VolumeMount{{Name: "v", MountPath: "/m"}}
@@ -1318,6 +1319,7 @@ func TestBuildBrowserPodInitContainerFields(t *testing.T) {
 		Name:            "init",
 		Image:           "img",
 		Command:         &cmd,
+		Args:            &args,
 		WorkingDir:      &workDir,
 		Ports:           &ports,
 		Env:             &env,
@@ -1342,6 +1344,94 @@ func TestBuildBrowserPodInitContainerFields(t *testing.T) {
 	}
 	if len(pod.Spec.InitContainers[0].Env) != 1 || len(pod.Spec.InitContainers[0].Ports) != 1 {
 		t.Fatalf("expected init container fields to be set")
+	}
+	ic := pod.Spec.InitContainers[0]
+	if len(ic.Command) != 1 || ic.Command[0] != "sh" {
+		t.Fatalf("expected init container command, got %+v", ic.Command)
+	}
+	if len(ic.Args) != 1 || ic.Args[0] != "-c" {
+		t.Fatalf("expected init container args, got %+v", ic.Args)
+	}
+}
+
+func TestBuildBrowserPodBrowserCommandAndArgs(t *testing.T) {
+	cmd := []string{"custom-entrypoint"}
+	args := []string{"--headless", "--port=9222"}
+
+	cfg := &configv1.BrowserVersionConfigSpec{
+		Image:   "browser",
+		Command: &cmd,
+		Args:    &args,
+	}
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "b1",
+			Namespace: "ns",
+		},
+	}
+
+	pod := buildBrowserPod(brw, cfg, nil)
+	bc := pod.Spec.Containers[0]
+	if len(bc.Command) != 1 || bc.Command[0] != "custom-entrypoint" {
+		t.Fatalf("expected browser container command, got %+v", bc.Command)
+	}
+	if len(bc.Args) != 2 || bc.Args[0] != "--headless" || bc.Args[1] != "--port=9222" {
+		t.Fatalf("expected browser container args, got %+v", bc.Args)
+	}
+}
+
+func TestBuildBrowserPodSidecarArgs(t *testing.T) {
+	sidecarCmd := []string{"run"}
+	sidecarArgs := []string{"--flag", "--verbose"}
+	sidecars := []configv1.Sidecar{{
+		Name:    "proxy",
+		Image:   "proxy-img",
+		Command: &sidecarCmd,
+		Args:    &sidecarArgs,
+	}}
+
+	cfg := &configv1.BrowserVersionConfigSpec{
+		Image:    "browser",
+		Sidecars: &sidecars,
+	}
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "b1",
+			Namespace: "ns",
+		},
+	}
+
+	pod := buildBrowserPod(brw, cfg, nil)
+	if len(pod.Spec.Containers) < 2 {
+		t.Fatalf("expected at least 2 containers")
+	}
+	sc := pod.Spec.Containers[1]
+	if len(sc.Command) != 1 || sc.Command[0] != "run" {
+		t.Fatalf("expected sidecar command, got %+v", sc.Command)
+	}
+	if len(sc.Args) != 2 || sc.Args[0] != "--flag" || sc.Args[1] != "--verbose" {
+		t.Fatalf("expected sidecar args, got %+v", sc.Args)
+	}
+}
+
+func TestBuildBrowserPodNilCommandAndArgs(t *testing.T) {
+	cfg := &configv1.BrowserVersionConfigSpec{
+		Image: "browser",
+	}
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "b1",
+			Namespace: "ns",
+		},
+	}
+
+	pod := buildBrowserPod(brw, cfg, nil)
+	bc := pod.Spec.Containers[0]
+	if bc.Command != nil {
+		t.Fatalf("expected nil command on browser container, got %+v", bc.Command)
+	}
+	if bc.Args != nil {
+		t.Fatalf("expected nil args on browser container, got %+v", bc.Args)
 	}
 }
 
@@ -3429,7 +3519,7 @@ func TestPodChangedPredicate(t *testing.T) {
 			old:  basePod(),
 			new: func() *corev1.Pod {
 				pod := basePod()
-				pod.Status.ContainerStatuses[0].Ready = false
+				pod.Status.ContainerStatuses[0].RestartCount = 1
 				return pod
 			}(),
 			want: true,
@@ -3439,10 +3529,20 @@ func TestPodChangedPredicate(t *testing.T) {
 			old:  basePod(),
 			new: func() *corev1.Pod {
 				pod := basePod()
-				pod.Status.InitContainerStatuses[0].Ready = false
+				pod.Status.InitContainerStatuses[0].RestartCount = 1
 				return pod
 			}(),
 			want: true,
+		},
+		{
+			name: "only Ready changed (not tracked)",
+			old:  basePod(),
+			new: func() *corev1.Pod {
+				pod := basePod()
+				pod.Status.ContainerStatuses[0].Ready = false
+				return pod
+			}(),
+			want: false,
 		},
 		{
 			name: "deletion timestamp set",
@@ -3476,6 +3576,154 @@ func TestPodChangedPredicate(t *testing.T) {
 			})
 			if got != tc.want {
 				t.Fatalf("Update() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPodContainerStatusesChanged(t *testing.T) {
+	base := []corev1.ContainerStatus{
+		{Name: "browser", RestartCount: 0, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+	}
+
+	cases := []struct {
+		name string
+		old  []corev1.ContainerStatus
+		new  []corev1.ContainerStatus
+		want bool
+	}{
+		{
+			name: "no changes",
+			old:  base,
+			new:  []corev1.ContainerStatus{{Name: "browser", RestartCount: 0, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}},
+			want: false,
+		},
+		{
+			name: "both empty",
+			old:  nil,
+			new:  nil,
+			want: false,
+		},
+		{
+			name: "length differs",
+			old:  base,
+			new:  nil,
+			want: true,
+		},
+		{
+			name: "restart count changed",
+			old:  base,
+			new:  []corev1.ContainerStatus{{Name: "browser", RestartCount: 1, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}},
+			want: true,
+		},
+		{
+			name: "state changed running to waiting",
+			old:  base,
+			new:  []corev1.ContainerStatus{{Name: "browser", RestartCount: 0, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}},
+			want: true,
+		},
+		{
+			name: "name changed",
+			old:  base,
+			new:  []corev1.ContainerStatus{{Name: "sidecar", RestartCount: 0, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}},
+			want: true,
+		},
+		{
+			name: "Ready changed only (not tracked)",
+			old:  base,
+			new:  []corev1.ContainerStatus{{Name: "browser", RestartCount: 0, Ready: true, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}},
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := podContainerStatusesChanged(tc.old, tc.new)
+			if got != tc.want {
+				t.Fatalf("podContainerStatusesChanged() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPodStatusMatchesBrowser(t *testing.T) {
+	cases := []struct {
+		name    string
+		pod     []corev1.ContainerStatus
+		browser []browserv1.ContainerStatus
+		want    bool
+	}{
+		{
+			name:    "both empty",
+			pod:     nil,
+			browser: nil,
+			want:    true,
+		},
+		{
+			name: "equal",
+			pod: []corev1.ContainerStatus{
+				{Name: "browser", Image: "chrome:123", RestartCount: 0, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+			},
+			browser: []browserv1.ContainerStatus{
+				{Name: "browser", Image: "chrome:123", RestartCount: 0, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+			},
+			want: true,
+		},
+		{
+			name: "length differs",
+			pod: []corev1.ContainerStatus{
+				{Name: "browser"},
+			},
+			browser: nil,
+			want:    false,
+		},
+		{
+			name: "name differs",
+			pod: []corev1.ContainerStatus{
+				{Name: "browser", Image: "chrome:123"},
+			},
+			browser: []browserv1.ContainerStatus{
+				{Name: "sidecar", Image: "chrome:123"},
+			},
+			want: false,
+		},
+		{
+			name: "image differs",
+			pod: []corev1.ContainerStatus{
+				{Name: "browser", Image: "chrome:124"},
+			},
+			browser: []browserv1.ContainerStatus{
+				{Name: "browser", Image: "chrome:123"},
+			},
+			want: false,
+		},
+		{
+			name: "restart count differs",
+			pod: []corev1.ContainerStatus{
+				{Name: "browser", Image: "chrome:123", RestartCount: 1, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+			},
+			browser: []browserv1.ContainerStatus{
+				{Name: "browser", Image: "chrome:123", RestartCount: 0, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+			},
+			want: false,
+		},
+		{
+			name: "state differs",
+			pod: []corev1.ContainerStatus{
+				{Name: "browser", Image: "chrome:123", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "err"}}},
+			},
+			browser: []browserv1.ContainerStatus{
+				{Name: "browser", Image: "chrome:123", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := podStatusMatchesBrowser(tc.pod, tc.browser)
+			if got != tc.want {
+				t.Fatalf("podStatusMatchesBrowser() = %v, want %v", got, tc.want)
 			}
 		})
 	}

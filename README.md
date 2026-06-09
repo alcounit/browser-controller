@@ -203,6 +203,7 @@ Supported fields include:
 - `imagePullSecrets`
 - `dnsConfig`
 - `securityContext`
+- `command`, `args`
 - `workingDir`
 
 All fields are optional.
@@ -238,6 +239,43 @@ browsers:
 ```
 
 Each browser version supports the same override fields as the template.
+
+#### `command` and `args`
+
+`command` overrides the container's `ENTRYPOINT` and `args` overrides the container's `CMD`. These fields are available on three levels:
+
+- **Template** — sets defaults for the main browser container across all browsers/versions
+- **Browser version** — overrides the template for a specific browser version
+- **Sidecar / init container** — sets entrypoint and arguments per sidecar
+
+If `command` or `args` is `nil` at the browser version level, the value is inherited from the template. Sidecars inherit from the template sidecar with the same name.
+
+Example — starting a Playwright server with a custom entrypoint:
+
+```yaml
+browsers:
+  playwright-chromium:
+    "1.59.1":
+      image: mcr.microsoft.com/playwright:v1.59.1
+      command:
+      - "sh"
+      - "-c"
+      - "cd /opt/pw && exec ./node_modules/.bin/playwright-core run-server --port 4444 --host 0.0.0.0"
+```
+
+Example — passing CLI arguments to an MCP server image that has a default entrypoint:
+
+```yaml
+browsers:
+  playwright-mcp-chrome:
+    "0.0.75":
+      image: mcr.microsoft.com/playwright/mcp:v0.0.75
+      args:
+      - "--port"
+      - "8808"
+      - "--host"
+      - "0.0.0.0"
+```
 
 ---
 
@@ -443,6 +481,22 @@ Or combined:
 ```bash
 make deploy
 ```
+
+### Build variables
+
+The build process is controlled via the following Makefile variables:
+
+| Variable         | Description                                                  |
+|------------------|--------------------------------------------------------------|
+| `BINARY_NAME`    | Name of the produced binary (fixed: `browser-controller`)   |
+| `REGISTRY`       | Docker registry prefix (default: `localhost:5000`)           |
+| `IMAGE_NAME`     | Full image name, derived as `$(REGISTRY)/$(BINARY_NAME)`     |
+| `VERSION`        | Image version/tag (default: `develop`)                       |
+| `EXTRA_TAGS`     | Additional `-t` tags passed to `docker-push` (default: none) |
+| `PLATFORM`       | Target platform (default: `linux/amd64`)                     |
+| `CONTAINER_TOOL` | Container build tool (default: `docker`)                     |
+
+`REGISTRY` and `VERSION` are expected to be provided externally, which allows the same Makefile to be used locally and in CI.
 
 ## Deployment
 
