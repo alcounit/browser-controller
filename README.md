@@ -267,7 +267,7 @@ Example — passing CLI arguments to an MCP server image that has a default entr
 
 ```yaml
 browsers:
-  playwright-mcp-chrome:
+  playwright-mcp:
     "0.0.75":
       image: mcr.microsoft.com/playwright/mcp:v0.0.75
       args:
