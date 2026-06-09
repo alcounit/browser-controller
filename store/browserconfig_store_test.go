@@ -172,6 +172,104 @@ func TestBrowserConfigStoreOnAddOrUpdateSkipsSameResourceVersion(t *testing.T) {
 	}
 }
 
+func TestBrowserConfigStoreOnUpdateRemovesStaleKeys(t *testing.T) {
+	oldObj := &configv1.BrowserConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "cfg",
+			Namespace:       "ns",
+			ResourceVersion: "1",
+		},
+		Spec: configv1.BrowserConfigSpec{
+			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
+				"Chrome": {
+					"99.0":  {Image: "chrome:99"},
+					"100.0": {Image: "chrome:100"},
+				},
+			},
+		},
+	}
+
+	store := NewBrowserConfigStore()
+	store.onAddOrUpdate(nil, oldObj, logr.Discard())
+
+	if _, ok := store.Get("ns", "chrome", "99.0"); !ok {
+		t.Fatalf("expected chrome:99 to exist after initial add")
+	}
+	if _, ok := store.Get("ns", "chrome", "100.0"); !ok {
+		t.Fatalf("expected chrome:100 to exist after initial add")
+	}
+
+	newObj := &configv1.BrowserConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "cfg",
+			Namespace:       "ns",
+			ResourceVersion: "2",
+		},
+		Spec: configv1.BrowserConfigSpec{
+			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
+				"Chrome": {
+					"100.0": {Image: "chrome:100-updated"},
+				},
+			},
+		},
+	}
+
+	store.onAddOrUpdate(oldObj, newObj, logr.Discard())
+
+	if _, ok := store.Get("ns", "chrome", "99.0"); ok {
+		t.Fatalf("expected chrome:99 to be removed after update")
+	}
+
+	cfg, ok := store.Get("ns", "chrome", "100.0")
+	if !ok || cfg == nil {
+		t.Fatalf("expected chrome:100 to still exist after update")
+	}
+	if cfg.Image != "chrome:100-updated" {
+		t.Fatalf("expected chrome:100 to be updated, got %q", cfg.Image)
+	}
+}
+
+func TestBrowserConfigStoreOnUpdateRemovesStaleBrowser(t *testing.T) {
+	oldObj := &configv1.BrowserConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "cfg",
+			Namespace:       "ns",
+			ResourceVersion: "1",
+		},
+		Spec: configv1.BrowserConfigSpec{
+			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
+				"Chrome":  {"100.0": {Image: "chrome:100"}},
+				"Firefox": {"120.0": {Image: "firefox:120"}},
+			},
+		},
+	}
+
+	store := NewBrowserConfigStore()
+	store.onAddOrUpdate(nil, oldObj, logr.Discard())
+
+	newObj := &configv1.BrowserConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "cfg",
+			Namespace:       "ns",
+			ResourceVersion: "2",
+		},
+		Spec: configv1.BrowserConfigSpec{
+			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
+				"Chrome": {"100.0": {Image: "chrome:100"}},
+			},
+		},
+	}
+
+	store.onAddOrUpdate(oldObj, newObj, logr.Discard())
+
+	if _, ok := store.Get("ns", "firefox", "120.0"); ok {
+		t.Fatalf("expected firefox:120 to be removed after browser was dropped from config")
+	}
+	if _, ok := store.Get("ns", "chrome", "100.0"); !ok {
+		t.Fatalf("expected chrome:100 to still exist")
+	}
+}
+
 func TestBrowserConfigStoreOnDeleteRemovesKeys(t *testing.T) {
 	bc := &configv1.BrowserConfig{
 		ObjectMeta: metav1.ObjectMeta{

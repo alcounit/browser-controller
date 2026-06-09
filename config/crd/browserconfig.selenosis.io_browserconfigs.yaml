@@ -473,6 +473,14 @@ spec:
                         additionalProperties:
                           type: string
                         type: object
+                      args:
+                        items:
+                          type: string
+                        type: array
+                      command:
+                        items:
+                          type: string
+                        type: array
                       dnsConfig:
                         properties:
                           nameservers:
@@ -609,6 +617,10 @@ spec:
                       initContainers:
                         items:
                           properties:
+                            args:
+                              items:
+                                type: string
+                              type: array
                             command:
                               items:
                                 type: string
@@ -909,6 +921,10 @@ spec:
                       sidecars:
                         items:
                           properties:
+                            args:
+                              items:
+                                type: string
+                              type: array
                             command:
                               items:
                                 type: string
@@ -2379,6 +2395,14 @@ spec:
                     additionalProperties:
                       type: string
                     type: object
+                  args:
+                    items:
+                      type: string
+                    type: array
+                  command:
+                    items:
+                      type: string
+                    type: array
                   dnsConfig:
                     properties:
                       nameservers:
@@ -2513,6 +2537,10 @@ spec:
                   initContainers:
                     items:
                       properties:
+                        args:
+                          items:
+                            type: string
+                          type: array
                         command:
                           items:
                             type: string
@@ -2814,6 +2842,10 @@ spec:
                   sidecars:
                     items:
                       properties:
+                        args:
+                          items:
+                            type: string
+                          type: array
                         command:
                           items:
                             type: string

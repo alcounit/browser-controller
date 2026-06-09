@@ -48,7 +48,7 @@ type Template struct {
 	// Resources defines CPU/memory requests and limits for the main container.
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
-	//ImagePullPolicy defines container image pull policy
+	// ImagePullPolicy defines container image pull policy.
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 
 	// Volumes defines pod volumes.
@@ -69,7 +69,7 @@ type Template struct {
 	// HostAliases defines custom /etc/hosts entries.
 	HostAliases *[]corev1.HostAlias `json:"hostAliases,omitempty"`
 
-	// List of initialization containers belonging to the pod.
+	// InitContainers defines initialization containers for the pod.
 	InitContainers *[]Sidecar `json:"initContainers,omitempty"`
 
 	// Sidecars defines additional containers in the pod (minimum 1).
@@ -89,8 +89,13 @@ type Template struct {
 	// SecurityContext defines security context for the pod.
 	SecurityContext *corev1.PodSecurityContext `json:"securityContext,omitempty"`
 
-	// Container's working directory.
-	// +optional
+	// Command overrides the entrypoint of the main browser container.
+	Command *[]string `json:"command,omitempty"`
+
+	// Args overrides the arguments passed to the main browser container entrypoint.
+	Args *[]string `json:"args,omitempty"`
+
+	// WorkingDir sets the working directory for the main browser container.
 	WorkingDir *string `json:"workingDir,omitempty"`
 }
 
@@ -102,10 +107,13 @@ type Sidecar struct {
 	// Image is the container image.
 	Image string `json:"image"`
 
-	// Command overrides the container entrypoint.Template.
+	// Command overrides the container entrypoint.
 	Command *[]string `json:"command,omitempty"`
 
-	// Container's working directory.
+	// Args overrides the arguments passed to the container entrypoint.
+	Args *[]string `json:"args,omitempty"`
+
+	// WorkingDir sets the working directory for the container.
 	WorkingDir *string `json:"workingDir,omitempty"`
 
 	// Ports defines container ports.
@@ -117,7 +125,7 @@ type Sidecar struct {
 	// VolumeMounts defines mounts for pod volumes.
 	VolumeMounts *[]corev1.VolumeMount `json:"volumeMounts,omitempty"`
 
-	//ImagePullPolicy defines container image pull policy
+	// ImagePullPolicy defines container image pull policy.
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 
 	// Resources defines CPU/memory requests and limits for the sidecar container.
@@ -130,24 +138,65 @@ type BrowserVersionConfigSpec struct {
 	// Image is the browser container image.
 	Image string `json:"image"`
 
-	Labels           *map[string]string             `json:"labels,omitempty"`
-	Annotations      *map[string]string             `json:"annotations,omitempty"`
-	Env              *[]corev1.EnvVar               `json:"env,omitempty"`
-	Resources        *corev1.ResourceRequirements   `json:"resources,omitempty"`
-	ImagePullPolicy  corev1.PullPolicy              `json:"imagePullPolicy,omitempty"`
-	Volumes          *[]corev1.Volume               `json:"volumes,omitempty"`
-	VolumeMounts     *[]corev1.VolumeMount          `json:"volumeMounts,omitempty"`
-	NodeSelector     *map[string]string             `json:"nodeSelector,omitempty"`
-	Affinity         *corev1.Affinity               `json:"affinity,omitempty"`
-	Tolerations      *[]corev1.Toleration           `json:"tolerations,omitempty"`
-	HostAliases      *[]corev1.HostAlias            `json:"hostAliases,omitempty"`
-	InitContainers   *[]Sidecar                     `json:"initContainers,omitempty"`
-	Sidecars         *[]Sidecar                     `json:"sidecars,omitempty"`
-	Privileged       *bool                          `json:"privileged,omitempty"`
+	// Labels are additional pod labels.
+	Labels *map[string]string `json:"labels,omitempty"`
+
+	// Annotations are additional pod annotations.
+	Annotations *map[string]string `json:"annotations,omitempty"`
+
+	// Env defines environment variables for the main container.
+	Env *[]corev1.EnvVar `json:"env,omitempty"`
+
+	// Resources defines CPU/memory requests and limits for the main container.
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// ImagePullPolicy defines container image pull policy.
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+
+	// Volumes defines pod volumes.
+	Volumes *[]corev1.Volume `json:"volumes,omitempty"`
+
+	// VolumeMounts defines mounts for pod volumes.
+	VolumeMounts *[]corev1.VolumeMount `json:"volumeMounts,omitempty"`
+
+	// NodeSelector defines node selection constraints.
+	NodeSelector *map[string]string `json:"nodeSelector,omitempty"`
+
+	// Affinity defines pod affinity/anti-affinity rules.
+	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+
+	// Tolerations defines tolerations for node taints.
+	Tolerations *[]corev1.Toleration `json:"tolerations,omitempty"`
+
+	// HostAliases defines custom /etc/hosts entries.
+	HostAliases *[]corev1.HostAlias `json:"hostAliases,omitempty"`
+
+	// InitContainers defines initialization containers for the pod.
+	InitContainers *[]Sidecar `json:"initContainers,omitempty"`
+
+	// Sidecars defines additional containers in the pod.
+	Sidecars *[]Sidecar `json:"sidecars,omitempty"`
+
+	// Privileged indicates if the main container should run in privileged mode.
+	Privileged *bool `json:"privileged,omitempty"`
+
+	// ImagePullSecrets specifies secrets for pulling private images.
 	ImagePullSecrets *[]corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
-	DNSConfig        *corev1.PodDNSConfig           `json:"dnsConfig,omitempty"`
-	SecurityContext  *corev1.PodSecurityContext     `json:"securityContext,omitempty"`
-	WorkingDir       *string                        `json:"workingDir,omitempty"`
+
+	// DNSConfig defines pod-level DNS settings.
+	DNSConfig *corev1.PodDNSConfig `json:"dnsConfig,omitempty"`
+
+	// SecurityContext defines security context for the pod.
+	SecurityContext *corev1.PodSecurityContext `json:"securityContext,omitempty"`
+
+	// Command overrides the entrypoint of the main browser container.
+	Command *[]string `json:"command,omitempty"`
+
+	// Args overrides the arguments passed to the main browser container entrypoint.
+	Args *[]string `json:"args,omitempty"`
+
+	// WorkingDir sets the working directory for the main browser container.
+	WorkingDir *string `json:"workingDir,omitempty"`
 }
 
 // ConfigStatus defines the observed state of BrowserConfig.
@@ -257,6 +306,14 @@ func (b *BrowserVersionConfigSpec) mergeWithSpec(t *BrowserConfigSpec) {
 		b.SecurityContext = t.Template.SecurityContext
 	}
 
+	if b.Command == nil {
+		b.Command = t.Template.Command
+	}
+
+	if b.Args == nil {
+		b.Args = t.Template.Args
+	}
+
 	if b.WorkingDir == nil {
 		b.WorkingDir = t.Template.WorkingDir
 	}
@@ -322,54 +379,102 @@ func firstNonNilResource(template, override *corev1.ResourceRequirements) *corev
 }
 
 func mergeVolumePtr(template, override *[]corev1.Volume) *[]corev1.Volume {
-	result := []corev1.Volume{}
-	if template != nil {
-		result = append(result, *template...)
-	}
-
-	if override != nil {
-		result = append(result, *override...)
-	}
-
-	if len(result) == 0 {
+	if template == nil && override == nil {
 		return nil
 	}
 
-	return &result
+	index := make(map[string]int)
+	merged := make([]corev1.Volume, 0)
+
+	if template != nil {
+		for _, v := range *template {
+			index[v.Name] = len(merged)
+			merged = append(merged, v)
+		}
+	}
+
+	if override != nil {
+		for _, v := range *override {
+			if i, exists := index[v.Name]; exists {
+				merged[i] = v
+			} else {
+				index[v.Name] = len(merged)
+				merged = append(merged, v)
+			}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	return &merged
 }
 
 func mergeTolerationPtr(template, override *[]corev1.Toleration) *[]corev1.Toleration {
-	result := []corev1.Toleration{}
-	if template != nil {
-		result = append(result, *template...)
-	}
-
-	if override != nil {
-		result = append(result, *override...)
-	}
-
-	if len(result) == 0 {
+	if template == nil && override == nil {
 		return nil
 	}
 
-	return &result
+	index := make(map[string]int)
+	merged := make([]corev1.Toleration, 0)
+
+	if template != nil {
+		for _, t := range *template {
+			index[t.Key] = len(merged)
+			merged = append(merged, t)
+		}
+	}
+
+	if override != nil {
+		for _, t := range *override {
+			if i, exists := index[t.Key]; exists {
+				merged[i] = t
+			} else {
+				index[t.Key] = len(merged)
+				merged = append(merged, t)
+			}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	return &merged
 }
 
 func mergeHostAliasPtr(template, override *[]corev1.HostAlias) *[]corev1.HostAlias {
-	result := []corev1.HostAlias{}
-	if template != nil {
-		result = append(result, *template...)
-	}
-
-	if override != nil {
-		result = append(result, *override...)
-	}
-
-	if len(result) == 0 {
+	if template == nil && override == nil {
 		return nil
 	}
 
-	return &result
+	index := make(map[string]int)
+	merged := make([]corev1.HostAlias, 0)
+
+	if template != nil {
+		for _, h := range *template {
+			index[h.IP] = len(merged)
+			merged = append(merged, h)
+		}
+	}
+
+	if override != nil {
+		for _, h := range *override {
+			if i, exists := index[h.IP]; exists {
+				merged[i] = h
+			} else {
+				index[h.IP] = len(merged)
+				merged = append(merged, h)
+			}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	return &merged
 }
 
 func mergeSidecarPtr(template, override *[]Sidecar) *[]Sidecar {
@@ -399,49 +504,80 @@ func mergeSidecarPtr(template, override *[]Sidecar) *[]Sidecar {
 }
 
 func mergeVolumeMountsPtr(template, override *[]corev1.VolumeMount) *[]corev1.VolumeMount {
-	result := []corev1.VolumeMount{}
+	if template == nil && override == nil {
+		return nil
+	}
+
+	index := make(map[string]int)
+	merged := make([]corev1.VolumeMount, 0)
 
 	if template != nil {
 		for _, t := range *template {
-			copy := t.DeepCopy()
-			result = append(result, *copy)
+			cp := t.DeepCopy()
+			index[cp.MountPath] = len(merged)
+			merged = append(merged, *cp)
 		}
 	}
 
 	if override != nil {
 		for _, o := range *override {
-			copy := o.DeepCopy()
-			result = append(result, *copy)
+			cp := o.DeepCopy()
+			if i, exists := index[cp.MountPath]; exists {
+				merged[i] = *cp
+			} else {
+				index[cp.MountPath] = len(merged)
+				merged = append(merged, *cp)
+			}
 		}
 	}
 
-	if len(result) == 0 {
+	if len(merged) == 0 {
 		return nil
 	}
 
-	return &result
+	return &merged
 }
 
 func mergeLocalObjectRefPtr(template, override *[]corev1.LocalObjectReference) *[]corev1.LocalObjectReference {
-	result := []corev1.LocalObjectReference{}
-	if template != nil {
-		result = append(result, *template...)
-	}
-
-	if override != nil {
-		result = append(result, *override...)
-	}
-
-	if len(result) == 0 {
+	if template == nil && override == nil {
 		return nil
 	}
 
-	return &result
+	seen := make(map[string]int)
+	merged := make([]corev1.LocalObjectReference, 0)
+
+	if template != nil {
+		for _, r := range *template {
+			seen[r.Name] = len(merged)
+			merged = append(merged, r)
+		}
+	}
+
+	if override != nil {
+		for _, r := range *override {
+			if i, exists := seen[r.Name]; exists {
+				merged[i] = r
+			} else {
+				seen[r.Name] = len(merged)
+				merged = append(merged, r)
+			}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	return &merged
 }
 
 func (s *Sidecar) mergeWithTemplate(t *Sidecar) {
 	if s.Command == nil {
 		s.Command = t.Command
+	}
+
+	if s.Args == nil {
+		s.Args = t.Args
 	}
 
 	if s.WorkingDir == nil {
@@ -458,37 +594,69 @@ func (s *Sidecar) mergeWithTemplate(t *Sidecar) {
 }
 
 func mergeContainerPortPtr(template, override *[]corev1.ContainerPort) *[]corev1.ContainerPort {
-	result := []corev1.ContainerPort{}
-	if template != nil {
-		result = append(result, *template...)
-	}
-
-	if override != nil {
-		result = append(result, *override...)
-	}
-
-	if len(result) == 0 {
+	if template == nil && override == nil {
 		return nil
 	}
 
-	return &result
+	index := make(map[int32]int)
+	merged := make([]corev1.ContainerPort, 0)
+
+	if template != nil {
+		for _, p := range *template {
+			index[p.ContainerPort] = len(merged)
+			merged = append(merged, p)
+		}
+	}
+
+	if override != nil {
+		for _, p := range *override {
+			if i, exists := index[p.ContainerPort]; exists {
+				merged[i] = p
+			} else {
+				index[p.ContainerPort] = len(merged)
+				merged = append(merged, p)
+			}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	return &merged
 }
 
 func mergeVolumeMountPtr(template, override *[]corev1.VolumeMount) *[]corev1.VolumeMount {
-	result := []corev1.VolumeMount{}
-	if template != nil {
-		result = append(result, *template...)
-	}
-
-	if override != nil {
-		result = append(result, *override...)
-	}
-
-	if len(result) == 0 {
+	if template == nil && override == nil {
 		return nil
 	}
 
-	return &result
+	index := make(map[string]int)
+	merged := make([]corev1.VolumeMount, 0)
+
+	if template != nil {
+		for _, m := range *template {
+			index[m.MountPath] = len(merged)
+			merged = append(merged, m)
+		}
+	}
+
+	if override != nil {
+		for _, m := range *override {
+			if i, exists := index[m.MountPath]; exists {
+				merged[i] = m
+			} else {
+				index[m.MountPath] = len(merged)
+				merged = append(merged, m)
+			}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	return &merged
 }
 
 func findTemplateSidecar(template *[]Sidecar, name string) *Sidecar {

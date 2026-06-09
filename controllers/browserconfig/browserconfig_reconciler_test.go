@@ -8,6 +8,7 @@ import (
 
 	configv1 "github.com/alcounit/browser-controller/apis/browserconfig/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -109,8 +110,8 @@ func TestReconcileRemovesFinalizerOnDelete(t *testing.T) {
 
 type errorClient struct {
 	client.Client
-	getErr    error
-	updateErr error
+	getErr   error
+	patchErr error
 }
 
 func (e errorClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
@@ -120,11 +121,117 @@ func (e errorClient) Get(ctx context.Context, key client.ObjectKey, obj client.O
 	return e.Client.Get(ctx, key, obj, opts...)
 }
 
-func (e errorClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
-	if e.updateErr != nil {
-		return e.updateErr
+func (e errorClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if e.patchErr != nil {
+		return e.patchErr
 	}
-	return e.Client.Update(ctx, obj, opts...)
+	return e.Client.Patch(ctx, obj, patch, opts...)
+}
+
+type conflictClient struct {
+	client.Client
+	patchCalls int
+	failCount  int
+}
+
+func (c *conflictClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	c.patchCalls++
+	if c.patchCalls <= c.failCount {
+		return apierrors.NewConflict(configv1.Resource("browserconfigs"), obj.GetName(), errors.New("conflict"))
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+func TestRetryPatchConflictThenSuccess(t *testing.T) {
+	scheme := newTestScheme(t)
+	cfg := &configv1.BrowserConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cfg",
+			Namespace: "default",
+		},
+		Spec: configv1.BrowserConfigSpec{
+			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
+				"chrome": {"120": {Image: "img"}},
+			},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
+	cc := &conflictClient{Client: base, failCount: 1}
+	r := NewBrowserConfigReconciler(cc, scheme)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if cc.patchCalls < 2 {
+		t.Fatalf("expected at least 2 patch calls, got %d", cc.patchCalls)
+	}
+
+	got := &configv1.BrowserConfig{}
+	if err := base.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "cfg"}, got); err != nil {
+		t.Fatalf("failed to get config: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(got, browserConfigFinalizer) {
+		t.Fatalf("expected finalizer to be set after conflict retry")
+	}
+}
+
+func TestRetryPatchConflictExhausted(t *testing.T) {
+	scheme := newTestScheme(t)
+	cfg := &configv1.BrowserConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cfg",
+			Namespace: "default",
+		},
+		Spec: configv1.BrowserConfigSpec{
+			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
+				"chrome": {"120": {Image: "img"}},
+			},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
+	cc := &conflictClient{Client: base, failCount: maxRetries + 1}
+	r := NewBrowserConfigReconciler(cc, scheme)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
+	})
+	if err == nil {
+		t.Fatalf("expected error after exhausting retries")
+	}
+	if cc.patchCalls != maxRetries {
+		t.Fatalf("expected %d patch calls, got %d", maxRetries, cc.patchCalls)
+	}
+}
+
+func TestRetryPatchContextCancelled(t *testing.T) {
+	scheme := newTestScheme(t)
+	cfg := &configv1.BrowserConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cfg",
+			Namespace: "default",
+		},
+		Spec: configv1.BrowserConfigSpec{
+			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
+				"chrome": {"120": {Image: "img"}},
+			},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
+	cc := &conflictClient{Client: base, failCount: maxRetries + 1}
+	r := NewBrowserConfigReconciler(cc, scheme)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
+	})
+	if err == nil {
+		t.Fatalf("expected error from cancelled context")
+	}
 }
 
 func TestReconcileGetError(t *testing.T) {
@@ -143,7 +250,7 @@ func TestReconcileGetError(t *testing.T) {
 	}
 }
 
-func TestReconcileAddFinalizerUpdateError(t *testing.T) {
+func TestReconcileAddFinalizerPatchError(t *testing.T) {
 	scheme := newTestScheme(t)
 	cfg := &configv1.BrowserConfig{
 		ObjectMeta: metav1.ObjectMeta{
@@ -157,7 +264,7 @@ func TestReconcileAddFinalizerUpdateError(t *testing.T) {
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
-	r := NewBrowserConfigReconciler(errorClient{Client: base, updateErr: errors.New("update")}, scheme)
+	r := NewBrowserConfigReconciler(errorClient{Client: base, patchErr: errors.New("patch")}, scheme)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
@@ -170,7 +277,7 @@ func TestReconcileAddFinalizerUpdateError(t *testing.T) {
 	}
 }
 
-func TestReconcileRemoveFinalizerUpdateError(t *testing.T) {
+func TestReconcileRemoveFinalizerPatchError(t *testing.T) {
 	scheme := newTestScheme(t)
 	now := metav1.NewTime(time.Now().UTC())
 	cfg := &configv1.BrowserConfig{
@@ -187,7 +294,7 @@ func TestReconcileRemoveFinalizerUpdateError(t *testing.T) {
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
-	r := NewBrowserConfigReconciler(errorClient{Client: base, updateErr: errors.New("update")}, scheme)
+	r := NewBrowserConfigReconciler(errorClient{Client: base, patchErr: errors.New("patch")}, scheme)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
@@ -197,5 +304,32 @@ func TestReconcileRemoveFinalizerUpdateError(t *testing.T) {
 	}
 	if res.RequeueAfter != shortRetry {
 		t.Fatalf("expected short retry, got %v", res.RequeueAfter)
+	}
+}
+
+func TestRetryPatchContextCancelledDuringBackoff(t *testing.T) {
+	scheme := newTestScheme(t)
+	cfg := &configv1.BrowserConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"},
+		Spec: configv1.BrowserConfigSpec{
+			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
+				"chrome": {"120": {Image: "img"}},
+			},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
+	cc := &conflictClient{Client: base, failCount: maxRetries + 1}
+	r := NewBrowserConfigReconciler(cc, scheme)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	err := r.retryPatch(ctx, cfg, func(*configv1.BrowserConfig) {})
+	if err == nil {
+		t.Fatalf("expected error from cancelled context")
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("retryPatch took %v on cancelled context, expected < 200ms", elapsed)
 	}
 }

@@ -195,6 +195,7 @@ func TestBrowserVersionConfigSpecMergeWithSpecMergesAllPaths(t *testing.T) {
 	templateMounts := []corev1.VolumeMount{{Name: "template-vol", MountPath: "/template"}}
 	overrideMounts := []corev1.VolumeMount{{Name: "override-vol", MountPath: "/override"}}
 	templateCommand := []string{"tmpl-cmd"}
+	templateSidecarArgs := []string{"tmpl-sc-arg"}
 	templateSidecarEnv := []corev1.EnvVar{{Name: "TMPL_SC_ENV", Value: "1"}}
 	overrideSidecarEnv := []corev1.EnvVar{{Name: "OVR_SC_ENV", Value: "1"}}
 	templatePorts := []corev1.ContainerPort{{ContainerPort: 8080}}
@@ -204,6 +205,7 @@ func TestBrowserVersionConfigSpecMergeWithSpecMergesAllPaths(t *testing.T) {
 			Name:         "shared-sidecar",
 			Image:        "template-sc",
 			Command:      &templateCommand,
+			Args:         &templateSidecarArgs,
 			WorkingDir:   strPtr("/template-sidecar-workdir"),
 			Env:          &templateSidecarEnv,
 			Ports:        &templatePorts,
@@ -238,6 +240,7 @@ func TestBrowserVersionConfigSpecMergeWithSpecMergesAllPaths(t *testing.T) {
 	templateDNSConfig := &corev1.PodDNSConfig{}
 	templateSecurityContext := &corev1.PodSecurityContext{}
 	templateWorkingDir := "/template-workdir"
+	templateArgs := []string{"tmpl-arg"}
 
 	spec := BrowserConfigSpec{
 		Template: &Template{
@@ -258,6 +261,8 @@ func TestBrowserVersionConfigSpecMergeWithSpecMergesAllPaths(t *testing.T) {
 			ImagePullSecrets: &templatePullSecrets,
 			DNSConfig:        templateDNSConfig,
 			SecurityContext:  templateSecurityContext,
+			Command:          &templateCommand,
+			Args:             &templateArgs,
 			WorkingDir:       &templateWorkingDir,
 		},
 	}
@@ -291,6 +296,12 @@ func TestBrowserVersionConfigSpecMergeWithSpecMergesAllPaths(t *testing.T) {
 	}
 	if b.DNSConfig != templateDNSConfig || b.SecurityContext != templateSecurityContext || b.WorkingDir == nil || *b.WorkingDir != templateWorkingDir {
 		t.Fatalf("expected dns/securityContext/workingDir to inherit from template")
+	}
+	if b.Command == nil || len(*b.Command) != 1 || (*b.Command)[0] != "tmpl-cmd" {
+		t.Fatalf("expected command to inherit from template, got %+v", b.Command)
+	}
+	if b.Args == nil || len(*b.Args) != 1 || (*b.Args)[0] != "tmpl-arg" {
+		t.Fatalf("expected args to inherit from template, got %+v", b.Args)
 	}
 
 	if b.Labels == nil || (*b.Labels)["from-template"] != "1" || (*b.Labels)["from-override"] != "1" {
@@ -326,6 +337,9 @@ func TestBrowserVersionConfigSpecMergeWithSpecMergesAllPaths(t *testing.T) {
 	}
 	if shared.Command == nil || len(*shared.Command) != 1 || (*shared.Command)[0] != "tmpl-cmd" {
 		t.Fatalf("expected shared sidecar command from template, got %+v", shared.Command)
+	}
+	if shared.Args == nil || len(*shared.Args) != 1 || (*shared.Args)[0] != "tmpl-sc-arg" {
+		t.Fatalf("expected shared sidecar args from template, got %+v", shared.Args)
 	}
 	if shared.Resources != &templateResources {
 		t.Fatalf("expected shared sidecar resources from template")
@@ -414,6 +428,7 @@ func TestFindTemplateSidecar(t *testing.T) {
 
 func TestSidecarMergeWithTemplate(t *testing.T) {
 	templateCommand := []string{"run"}
+	templateArgs := []string{"--flag"}
 	templateEnv := []corev1.EnvVar{{Name: "TMPL", Value: "1"}}
 	overrideEnv := []corev1.EnvVar{{Name: "OVR", Value: "1"}}
 	templatePorts := []corev1.ContainerPort{{ContainerPort: 8080}}
@@ -427,6 +442,7 @@ func TestSidecarMergeWithTemplate(t *testing.T) {
 	tmpl := Sidecar{
 		Name:         "s",
 		Command:      &templateCommand,
+		Args:         &templateArgs,
 		WorkingDir:   strPtr("/work"),
 		Env:          &templateEnv,
 		Ports:        &templatePorts,
@@ -438,6 +454,9 @@ func TestSidecarMergeWithTemplate(t *testing.T) {
 
 	if s.Command == nil || len(*s.Command) != 1 || (*s.Command)[0] != "run" {
 		t.Fatalf("expected command from template, got %+v", s.Command)
+	}
+	if s.Args == nil || len(*s.Args) != 1 || (*s.Args)[0] != "--flag" {
+		t.Fatalf("expected args from template, got %+v", s.Args)
 	}
 	if s.WorkingDir == nil || *s.WorkingDir != "/work" {
 		t.Fatalf("expected workingDir from template, got %+v", s.WorkingDir)
@@ -469,6 +488,200 @@ func TestMergeContainerPortPtrAndMergeVolumeMountPtr(t *testing.T) {
 	mergedMounts := mergeVolumeMountPtr(&templateMounts, &overrideMounts)
 	if mergedMounts == nil || len(*mergedMounts) != 2 {
 		t.Fatalf("expected merged volume mounts, got %+v", mergedMounts)
+	}
+}
+
+func TestMergeVolumePtrDedupsByName(t *testing.T) {
+	template := []corev1.Volume{
+		{Name: "shared", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "template-only"},
+	}
+	override := []corev1.Volume{
+		{Name: "shared", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/data"}}},
+		{Name: "override-only"},
+	}
+
+	merged := mergeVolumePtr(&template, &override)
+	if merged == nil || len(*merged) != 3 {
+		t.Fatalf("expected 3 volumes after dedup, got %d", len(*merged))
+	}
+	for _, v := range *merged {
+		if v.Name == "shared" && v.HostPath == nil {
+			t.Fatalf("expected override to win for shared volume")
+		}
+	}
+}
+
+func TestMergeTolerationPtrDedupsByKey(t *testing.T) {
+	template := []corev1.Toleration{
+		{Key: "shared", Value: "template", Effect: corev1.TaintEffectNoSchedule},
+		{Key: "template-only"},
+	}
+	override := []corev1.Toleration{
+		{Key: "shared", Value: "override", Effect: corev1.TaintEffectNoExecute},
+		{Key: "override-only"},
+	}
+
+	merged := mergeTolerationPtr(&template, &override)
+	if merged == nil || len(*merged) != 3 {
+		t.Fatalf("expected 3 tolerations after dedup, got %d", len(*merged))
+	}
+	for _, tol := range *merged {
+		if tol.Key == "shared" && tol.Value != "override" {
+			t.Fatalf("expected override to win for shared toleration key")
+		}
+	}
+}
+
+func TestMergeHostAliasPtrDedupsByIP(t *testing.T) {
+	template := []corev1.HostAlias{
+		{IP: "10.0.0.1", Hostnames: []string{"template-host"}},
+		{IP: "10.0.0.2", Hostnames: []string{"template-only"}},
+	}
+	override := []corev1.HostAlias{
+		{IP: "10.0.0.1", Hostnames: []string{"override-host"}},
+		{IP: "10.0.0.3", Hostnames: []string{"override-only"}},
+	}
+
+	merged := mergeHostAliasPtr(&template, &override)
+	if merged == nil || len(*merged) != 3 {
+		t.Fatalf("expected 3 hostAliases after dedup, got %d", len(*merged))
+	}
+	for _, h := range *merged {
+		if h.IP == "10.0.0.1" && h.Hostnames[0] != "override-host" {
+			t.Fatalf("expected override to win for shared IP")
+		}
+	}
+}
+
+func TestMergeLocalObjectRefPtrDedupsByName(t *testing.T) {
+	template := []corev1.LocalObjectReference{{Name: "shared"}, {Name: "template-only"}}
+	override := []corev1.LocalObjectReference{{Name: "shared"}, {Name: "override-only"}}
+
+	merged := mergeLocalObjectRefPtr(&template, &override)
+	if merged == nil || len(*merged) != 3 {
+		t.Fatalf("expected 3 refs after dedup, got %d", len(*merged))
+	}
+}
+
+func TestMergeContainerPortPtrDedupsByPort(t *testing.T) {
+	template := []corev1.ContainerPort{{Name: "http", ContainerPort: 80}, {ContainerPort: 9090}}
+	override := []corev1.ContainerPort{{Name: "http-override", ContainerPort: 80}, {ContainerPort: 443}}
+
+	merged := mergeContainerPortPtr(&template, &override)
+	if merged == nil || len(*merged) != 3 {
+		t.Fatalf("expected 3 ports after dedup, got %d", len(*merged))
+	}
+	for _, p := range *merged {
+		if p.ContainerPort == 80 && p.Name != "http-override" {
+			t.Fatalf("expected override to win for port 80")
+		}
+	}
+}
+
+func TestMergeVolumeMountsPtrDedupsByMountPath(t *testing.T) {
+	template := []corev1.VolumeMount{{Name: "vol-a", MountPath: "/shared"}, {Name: "vol-b", MountPath: "/template"}}
+	override := []corev1.VolumeMount{{Name: "vol-c", MountPath: "/shared"}, {Name: "vol-d", MountPath: "/override"}}
+
+	merged := mergeVolumeMountsPtr(&template, &override)
+	if merged == nil || len(*merged) != 3 {
+		t.Fatalf("expected 3 mounts after dedup, got %d", len(*merged))
+	}
+	for _, m := range *merged {
+		if m.MountPath == "/shared" && m.Name != "vol-c" {
+			t.Fatalf("expected override to win for mount path /shared")
+		}
+	}
+}
+
+func TestMergeVolumeMountPtrDedupsByMountPath(t *testing.T) {
+	template := []corev1.VolumeMount{{Name: "vol-a", MountPath: "/shared"}}
+	override := []corev1.VolumeMount{{Name: "vol-b", MountPath: "/shared"}}
+
+	merged := mergeVolumeMountPtr(&template, &override)
+	if merged == nil || len(*merged) != 1 {
+		t.Fatalf("expected 1 mount after dedup, got %d", len(*merged))
+	}
+	if (*merged)[0].Name != "vol-b" {
+		t.Fatalf("expected override to win, got %q", (*merged)[0].Name)
+	}
+}
+
+func TestMergeWithSpecCommandArgsInheritFromTemplate(t *testing.T) {
+	templateCmd := []string{"entrypoint"}
+	templateArgs := []string{"--verbose"}
+	spec := BrowserConfigSpec{
+		Template: &Template{
+			Command: &templateCmd,
+			Args:    &templateArgs,
+		},
+		Browsers: map[string]map[string]*BrowserVersionConfigSpec{
+			"chrome": {
+				"130.0": {Image: "chrome:130"},
+			},
+		},
+	}
+
+	spec.MergeWithTemplate()
+
+	cfg := spec.Browsers["chrome"]["130.0"]
+	if cfg.Command == nil || (*cfg.Command)[0] != "entrypoint" {
+		t.Fatalf("expected command to inherit from template, got %+v", cfg.Command)
+	}
+	if cfg.Args == nil || (*cfg.Args)[0] != "--verbose" {
+		t.Fatalf("expected args to inherit from template, got %+v", cfg.Args)
+	}
+}
+
+func TestMergeWithSpecCommandArgsOverridePreserved(t *testing.T) {
+	templateCmd := []string{"entrypoint"}
+	templateArgs := []string{"--verbose"}
+	overrideCmd := []string{"custom-cmd"}
+	overrideArgs := []string{"--custom"}
+	spec := BrowserConfigSpec{
+		Template: &Template{
+			Command: &templateCmd,
+			Args:    &templateArgs,
+		},
+		Browsers: map[string]map[string]*BrowserVersionConfigSpec{
+			"chrome": {
+				"131.0": {
+					Image:   "chrome:131",
+					Command: &overrideCmd,
+					Args:    &overrideArgs,
+				},
+			},
+		},
+	}
+
+	spec.MergeWithTemplate()
+
+	cfg := spec.Browsers["chrome"]["131.0"]
+	if cfg.Command == nil || (*cfg.Command)[0] != "custom-cmd" {
+		t.Fatalf("expected override command to be preserved, got %+v", cfg.Command)
+	}
+	if cfg.Args == nil || (*cfg.Args)[0] != "--custom" {
+		t.Fatalf("expected override args to be preserved, got %+v", cfg.Args)
+	}
+}
+
+func TestSidecarMergeWithTemplateArgsOverridePreserved(t *testing.T) {
+	templateArgs := []string{"--template"}
+	overrideArgs := []string{"--override"}
+
+	s := Sidecar{
+		Name: "s",
+		Args: &overrideArgs,
+	}
+	tmpl := Sidecar{
+		Name: "s",
+		Args: &templateArgs,
+	}
+
+	s.mergeWithTemplate(&tmpl)
+
+	if s.Args == nil || (*s.Args)[0] != "--override" {
+		t.Fatalf("expected override args to be preserved, got %+v", s.Args)
 	}
 }
 

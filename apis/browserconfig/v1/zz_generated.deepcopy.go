@@ -278,6 +278,24 @@ func (in *BrowserVersionConfigSpec) DeepCopyInto(out *BrowserVersionConfigSpec) 
 		*out = new(corev1.PodSecurityContext)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.Command != nil {
+		in, out := &in.Command, &out.Command
+		*out = new([]string)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]string, len(*in))
+			copy(*out, *in)
+		}
+	}
+	if in.Args != nil {
+		in, out := &in.Args, &out.Args
+		*out = new([]string)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]string, len(*in))
+			copy(*out, *in)
+		}
+	}
 	if in.WorkingDir != nil {
 		in, out := &in.WorkingDir, &out.WorkingDir
 		*out = new(string)
@@ -316,6 +334,15 @@ func (in *Sidecar) DeepCopyInto(out *Sidecar) {
 	*out = *in
 	if in.Command != nil {
 		in, out := &in.Command, &out.Command
+		*out = new([]string)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]string, len(*in))
+			copy(*out, *in)
+		}
+	}
+	if in.Args != nil {
+		in, out := &in.Args, &out.Args
 		*out = new([]string)
 		if **in != nil {
 			in, out := *in, *out
@@ -522,6 +549,24 @@ func (in *Template) DeepCopyInto(out *Template) {
 		in, out := &in.SecurityContext, &out.SecurityContext
 		*out = new(corev1.PodSecurityContext)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.Command != nil {
+		in, out := &in.Command, &out.Command
+		*out = new([]string)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]string, len(*in))
+			copy(*out, *in)
+		}
+	}
+	if in.Args != nil {
+		in, out := &in.Args, &out.Args
+		*out = new([]string)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]string, len(*in))
+			copy(*out, *in)
+		}
 	}
 	if in.WorkingDir != nil {
 		in, out := &in.WorkingDir, &out.WorkingDir
