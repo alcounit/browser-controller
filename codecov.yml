@@ -1,0 +1,15 @@
+codecov:
+  branch: main
+
+ignore:
+  - "cmd/**"
+  - "pkg/clientset/**"
+  - "pkg/informers/**"
+  - "pkg/listers/**"
+  - "**/zz_generated*.go"
+
+coverage:
+  status:
+    project:
+      default:
+        informational: true
