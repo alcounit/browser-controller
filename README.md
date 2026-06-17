@@ -1,47 +1,52 @@
-[![GitHub release](https://img.shields.io/github/v/release/alcounit/browser-controller)](https://github.com/alcounit/browser-controller/releases) [![Go Reference](https://pkg.go.dev/badge/github.com/alcounit/browser-controller.svg)](https://pkg.go.dev/github.com/alcounit/browser-controller) [![Docker Pulls](https://img.shields.io/docker/pulls/alcounit/browser-controller.svg)](https://hub.docker.com/r/alcounit/browser-controller) [![codecov](https://codecov.io/gh/alcounit/browser-controller/branch/main/graph/badge.svg)](https://codecov.io/gh/alcounit/browser-controller) [![Go Report Card](https://goreportcard.com/badge/github.com/alcounit/browser-controller)](https://goreportcard.com/report/github.com/alcounit/browser-controller)
+# browser-controller
 
-# Browser Controller
+**Kubernetes operator for the [Selenosis](https://github.com/alcounit/selenosis) platform.**
+It reconciles `Browser` and `BrowserConfig` custom resources into ephemeral browser Pods —
+one Pod per `Browser` — with deterministic, finalizer-backed cleanup.
 
-Browser Controller is a Kubernetes controller for the **Selenosis** ecosystem.  
-It manages `Browser` and `BrowserConfig` custom resources and is responsible for creating, monitoring, and cleaning up ephemeral browser Pods.
-
-The controller is designed for deterministic browser provisioning with strict lifecycle management.
-
----
-
-## Overview
-
-- **Browser** — runtime resource representing a single browser instance.
-- **BrowserConfig** — configuration resource defining browser images and pod templates.
-- **Controller** — resolves configuration, creates Pods, tracks their lifecycle, and updates status.
-
-Each `Browser` resource results in **exactly one Pod** with the same name.
+[![GitHub release](https://img.shields.io/github/v/release/alcounit/browser-controller)](https://github.com/alcounit/browser-controller/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/alcounit/browser-controller.svg)](https://pkg.go.dev/github.com/alcounit/browser-controller)
+[![Docker Pulls](https://img.shields.io/docker/pulls/alcounit/browser-controller.svg)](https://hub.docker.com/r/alcounit/browser-controller)
+[![codecov](https://codecov.io/gh/alcounit/browser-controller/branch/main/graph/badge.svg)](https://codecov.io/gh/alcounit/browser-controller)
+[![Go Report Card](https://goreportcard.com/badge/github.com/alcounit/browser-controller)](https://goreportcard.com/report/github.com/alcounit/browser-controller)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
 ---
 
-## What the Controller Does
+## What it does
 
-- Registers `Browser` and `BrowserConfig` CRDs
-- Reconciles `Browser` resources into Pods
-- Resolves configuration using `BrowserConfig` (template + overrides)
-- Updates `Browser.status` with runtime information
-- Ensures proper cleanup via finalizers
-- Exposes health, readiness, and metrics endpoints
+- **Reconciles `Browser` → Pod.** Each `Browser` resource becomes **exactly one Pod** with
+  the same name, built from a reusable `BrowserConfig` template.
+- **Resolves configuration.** Merges `BrowserConfig` in a deterministic order
+  (version → browser → template).
+- **Publishes status.** Continuously updates `Browser.status` (phase, pod IP, container
+  statuses, human-readable failure reason).
+- **Guarantees cleanup.** A finalizer ensures the `Browser` CR and its Pod are always
+  removed — on success, failure, eviction, idle, or external delete.
+- **Treats pods as ephemeral.** Pods are non-restarting; failures are terminal and surfaced
+  in status before deletion.
+
+It is the only component in the stack that creates or deletes Pods.
 
 ---
 
-## Requirements & RBAC
+## How it fits
 
-- Runs inside a Kubernetes cluster (in-cluster config)
-- Uses a ServiceAccount with ClusterRole / ClusterRoleBinding
-- RBAC manifests are located in `config/rbac`
-- Examples assume the `default` namespace
+| Component | Role |
+| --- | --- |
+| **[selenosis](https://github.com/alcounit/selenosis)** | Stateless Selenium / Playwright / MCP hub. |
+| **[seleniferous](https://github.com/alcounit/seleniferous)** | Sidecar proxy inside each browser pod. |
+| **[browser-controller](https://github.com/alcounit/browser-controller)** (this repo) | Operator that reconciles `Browser` / `BrowserConfig` CRDs into pods. Owns the CRD types. |
+| **[browser-service](https://github.com/alcounit/browser-service)** | REST + SSE facade over `Browser` resources. |
+| **[browser-ui](https://github.com/alcounit/browser-ui)** | Dashboard with live sessions + VNC. |
+| **[selenosis-deploy](https://github.com/alcounit/selenosis-deploy)** | Helm chart that deploys the whole stack. **Start here.** |
 
 ---
 
 ## Quickstart
 
-Apply CRDs, RBAC, and deploy the controller:
+Normally deployed via the [Helm chart](https://github.com/alcounit/selenosis-deploy). To
+run it standalone, apply the CRDs, RBAC, and the controller:
 
 ```bash
 kubectl apply -f config/crd
@@ -49,81 +54,23 @@ kubectl apply -f config/rbac
 kubectl apply -f config/controller
 ```
 
-BrowserConfig examples `config/examples`
+Runs in-cluster (in-cluster config) with a ServiceAccount + ClusterRole/ClusterRoleBinding
+(`config/rbac`). Ready-to-use `BrowserConfig` examples live in `config/examples`.
 
 ---
 
-## Browser CRD
+## Custom resources
 
-`Browser` is a namespaced CustomResource that defines a desired browser session (browser type and version) and exposes the actual runtime state of the underlying Kubernetes Pod (phase, IP, container details). It is used by the browser-controller to manage the full lifecycle of browser pods.
+Two namespaced CRDs, each in its own API group:
 
-### API Overview
-
-- **Group/Version:** `selenosis.io/v1` (adjust if your API group differs)
-- **Kind:** `Browser`
-- **Scope:** Namespaced
-- **Resource:** `browsers`
-- **Short name:** `brw`
-- **Categories:** `selenosis`
-- **Status subresource:** enabled (`/status`)
-
-The CRD defines additional printer columns for quick inspection:
-
-- **Browser**: `.spec.browserName`
-- **Version**: `.spec.browserVersion`
-- **Phase**: `.status.phase`
-- **PodIP**: `.status.podIP`
-- **StartTime**: `.status.startTime`
-- **Age**: `.metadata.creationTimestamp`
-
-Example:
-
-```bash
-kubectl get browsers
-kubectl get brw
-```
-
-### Spec
-
-`spec` describes the desired browser configuration:
-
-- **browserName** *(string, required, minLength=1)*  
-  Name of the browser to run (for example: `chrome`, `firefox`).
-
-- **browserVersion** *(string, required, minLength=1)*  
-  Browser version to use (for example: `91.0`, `120.0`, or `latest` if supported by the controller).
-
-### Status
-
-`status` is populated by the controller and reflects the observed state of the browser pod:
-
-- **podIP** *(string, optional)*  
-  IP address assigned to the pod.
-
-- **phase** *(PodPhase, optional)*  
-  Current lifecycle phase of the pod (`Pending`, `Running`, `Succeeded`, `Failed`, `Unknown`).
-
-- **message** *(string, optional)*  
-  Human-readable description of the current condition.
-
-- **reason** *(string, optional)*  
-  Short, machine-friendly reason (for example: `Evicted`).
-
-- **startTime** *(Time, optional)*  
-  Timestamp when the pod was started.
-
-- **containerStatuses** *(array, optional)*  
-  Detailed status for each container:
-  - **name** — container name
-  - **state** — current container state (`Pending`, `Running`, `Failed`)
-  - **image** — container image
-  - **restartCount** — number of restarts
-  - **ports** — exposed ports (container/host, protocol, name)
-
-### Minimal Manifest Example
+- **`Browser`** (`brw`, group `browser.selenosis.io/v1`) — a desired browser session
+  (`browserName`, `browserVersion`) plus the live Pod state (phase, IP, container
+  statuses) published to `.status`.
+- **`BrowserConfig`** (group `browserconfig.selenosis.io/v1`) — the browser images and pod
+  templates the controller uses when creating Pods. It does **not** create Pods itself.
 
 ```yaml
-apiVersion: selenosis.io/v1 
+apiVersion: browser.selenosis.io/v1
 kind: Browser
 metadata:
   name: d568aeff-a91a-449b-834b-d79bf2d6d623
@@ -133,371 +80,215 @@ spec:
   browserVersion: "120.0"
 ```
 
-Apply and inspect:
+<details>
+<summary><b>Browser CRD — full spec, status, and printer columns</b></summary>
 
-```bash
-kubectl apply -f browser.yaml
-kubectl get brw 
-kubectl describe brw d568aeff-a91a-449b-834b-d79bf2d6d623
-kubectl get brw d568aeff-a91a-449b-834b-d79bf2d6d623 -o yaml
-```
-
-### Expected Controller Behavior
-
-- Based on `spec.browserName` and `spec.browserVersion`, the controller creates and manages a dedicated browser pod.
-- Runtime details (IP, phase, start time, container statuses) are continuously published to `.status`, allowing UIs and clients to quickly determine browser availability and health.
----
-## BrowserConfig CRD
-
-`BrowserConfig` is a namespaced CustomResource that defines **browser images and pod-level configuration templates** used by the browser-controller when creating browser pods.  
-It allows you to centrally manage defaults (template) and override them per **browser name** and **browser version**.
-
-This CRD does **not** create pods by itself. Instead, it acts as a configuration source consumed by the browser-controller.
-
----
-
-### API Overview
-
-- **Group/Version:** `selenosis.io/v1` (adjust if your API group differs)
-- **Kind:** `BrowserConfig`
-- **Scope:** Namespaced
+- **Group/Version:** `browser.selenosis.io/v1` · **Kind:** `Browser` · **Scope:** Namespaced
+- **Resource:** `browsers` · **Short name:** `brw` · **Categories:** `selenosis`
 - **Status subresource:** enabled (`/status`)
 
----
+Printer columns: `Browser` (`.spec.browserName`), `Version` (`.spec.browserVersion`),
+`Phase` (`.status.phase`), `PodIP` (`.status.podIP`), `StartTime` (`.status.startTime`),
+`Age`.
 
-### Purpose
+**Spec**
+- `browserName` *(string, required, minLength=1)* — e.g. `chrome`, `firefox`.
+- `browserVersion` *(string, required, minLength=1)* — e.g. `120.0`, or `latest` if supported.
 
-`BrowserConfig` provides:
+**Status** (populated by the controller)
+- `podIP` *(string)* — IP assigned to the pod.
+- `phase` *(PodPhase)* — `Pending` / `Running` / `Succeeded` / `Failed` / `Unknown`.
+- `message` *(string)* — human-readable condition description.
+- `reason` *(string)* — short machine reason (e.g. `Evicted`).
+- `startTime` *(Time)* — when the pod started.
+- `containerStatuses` *(array)* — per-container `name`, `state`, `image`, `restartCount`, `ports`.
 
-- A **global pod template** applied to all browsers and versions
-- Per-browser and per-version **override capabilities**
-- A deterministic **merge strategy** (version → browser → template)
-- Centralized control over:
-  - Browser images
-  - Resources
-  - Environment variables
-  - Volumes and mounts
-  - Sidecars and init containers
-  - Scheduling and security settings
-
----
-
-### Spec
-
-#### Template
-
-`spec.template` defines a **base pod configuration** applied to all browsers and versions unless explicitly overridden.
-
-Supported fields include:
-
-- `labels`, `annotations`
-- `env`
-- `resources`
-- `imagePullPolicy`
-- `volumes`, `volumeMounts`
-- `nodeSelector`, `affinity`, `tolerations`
-- `hostAliases`
-- `initContainers`
-- `sidecars`
-- `privileged`
-- `imagePullSecrets`
-- `dnsConfig`
-- `securityContext`
-- `command`, `args`
-- `workingDir`
-
-All fields are optional.
-
----
-
-#### Browsers
-
-`spec.browsers` is a required map that defines browser-specific and version-specific configuration.
-
-Structure:
-
-```yaml
-browsers:
-  <browserName>:
-    <browserVersion>:
-      image: <container-image>
-      ...
+```bash
+kubectl get brw
+kubectl describe brw <name>
+kubectl get brw <name> -o yaml
 ```
 
-Example:
+</details>
+
+<details>
+<summary><b>BrowserConfig CRD — template, browsers, command/args, merge semantics</b></summary>
+
+`BrowserConfig` centrally manages defaults (template) and overrides them per browser name
+and version. Group/Version `browserconfig.selenosis.io/v1`, Kind `BrowserConfig`,
+namespaced, `/status` subresource enabled.
+
+**`spec.template`** — base pod config applied to all browsers/versions unless overridden.
+Supported fields (all optional): `labels`, `annotations`, `env`, `resources`,
+`imagePullPolicy`, `volumes`, `volumeMounts`, `nodeSelector`, `affinity`, `tolerations`,
+`hostAliases`, `initContainers`, `sidecars`, `privileged`, `imagePullSecrets`, `dnsConfig`,
+`securityContext`, `command`, `args`, `workingDir`.
+
+**`spec.browsers`** — required map of browser-specific, version-specific config:
 
 ```yaml
 browsers:
   chrome:
     "120.0":
       image: selenium/standalone-chrome:120.0
-    "121.0":
-      image: selenium/standalone-chrome:121.0
   firefox:
     "118.0":
       image: selenium/standalone-firefox:118.0
 ```
 
-Each browser version supports the same override fields as the template.
-
-#### `command` and `args`
-
-`command` overrides the container's `ENTRYPOINT` and `args` overrides the container's `CMD`. These fields are available on three levels:
-
-- **Template** — sets defaults for the main browser container across all browsers/versions
-- **Browser version** — overrides the template for a specific browser version
-- **Sidecar / init container** — sets entrypoint and arguments per sidecar
-
-If `command` or `args` is `nil` at the browser version level, the value is inherited from the template. Sidecars inherit from the template sidecar with the same name.
-
-Example — starting a Playwright server with a custom entrypoint:
+**`command` / `args`** override the container `ENTRYPOINT` / `CMD` at three levels:
+template (default for the main browser container), browser version (override per version),
+and per sidecar/init container. `nil` inherits from the template.
 
 ```yaml
+# Custom entrypoint to start a Playwright server
 browsers:
   playwright-chromium:
     "1.59.1":
       image: mcr.microsoft.com/playwright:v1.59.1
-      command:
-      - "sh"
-      - "-c"
-      - "cd /opt/pw && exec ./node_modules/.bin/playwright-core run-server --port 4444 --host 0.0.0.0"
-```
+      command: ["sh", "-c", "cd /opt/pw && exec ./node_modules/.bin/playwright-core run-server --port 4444 --host 0.0.0.0"]
 
-Example — passing CLI arguments to an MCP server image that has a default entrypoint:
-
-```yaml
-browsers:
+# CLI args for an MCP image that already has an entrypoint
   playwright-mcp:
     "0.0.75":
       image: mcr.microsoft.com/playwright/mcp:v0.0.75
-      args:
-      - "--port"
-      - "8808"
-      - "--host"
-      - "0.0.0.0"
+      args: ["--port", "8808", "--host", "0.0.0.0"]
 ```
 
----
+**Merge semantics** — two tiers, later overrides earlier: `spec.template` (base) →
+the per-version entry at `spec.browsers[name][version]`.
+- `nil` fields inherit from the template.
+- Maps and lists are **merged with deduplication** (override wins on key conflict), not replaced.
+- Merge keys: sidecars/init containers by **name**, env vars by **name**, volumes by **name**,
+  tolerations by **key**, host aliases by **IP**, image pull secrets by **name**, container
+  ports by **port number**, volume mounts by **mount path**.
 
-### Merge Semantics
+This keeps configuration reusable and avoids Pods rejected for duplicate entries.
 
-Configuration is merged in the following order (later overrides earlier):
+**Status**: `version` (config version id), `lastUpdated` (timestamp).
 
-1. **Template**
-2. **Browser-level version config**
-3. **Explicit version overrides**
-
-Rules:
-
-- `nil` fields inherit values from the template
-- Maps and lists are **merged with deduplication**, not replaced — override wins on key conflict
-- Sidecars and init containers are merged by **name**
-- Environment variables are merged by **variable name**
-- Volumes are merged by **name**
-- Tolerations are merged by **key**
-- Host aliases are merged by **IP**
-- Image pull secrets are merged by **name**
-- Container ports are merged by **container port number**
-- Volume mounts are merged by **mount path**
-
-This ensures predictable and reusable configuration without duplication or rejected Pods due to duplicate entries.
+</details>
 
 ---
 
-### Status
+## Reconciliation & cleanup
 
-`status` reflects metadata about the effective configuration:
+`BrowserConfig` is cached by the controller; reconciling a `Browser` resolves its config,
+creates a Pod with the same name, tracks the Pod's lifecycle, and updates `Browser.status`.
+Pods are ephemeral and non-restarting; failures are terminal.
 
-- **version** *(string)* — current configuration version identifier
-- **lastUpdated** *(timestamp)* — last update time
+Cleanup is enforced by a finalizer (`browserpod.selenosis.io/finalizer`) on every `Browser`
+CR, so the CR **and** its Pod are always removed regardless of failure mode — and a
+human-readable reason is written to `Browser.status.message` first (and surfaced as an SSE
+event by browser-service) before the CR disappears.
 
----
+<details>
+<summary><b>Cleanup mechanism and scenario matrix</b></summary>
 
-### Minimal Example
+Two internal primitives:
+- **`deletePod`** — force-deletes the Pod (`gracePeriodSeconds=0`); ignores `NotFound`.
+- **`deleteBrowser`** — removes the finalizer, then `Delete`s the CR (Kubernetes completes
+  deletion immediately once the finalizer is gone).
 
-```yaml
-apiVersion: selenosis.io/v1
-kind: BrowserConfig
-metadata:
-  name: default-browser-config
-  namespace: default
-spec:
-  template:
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-    env:
-      - name: TZ
-        value: UTC
-
-  browsers:
-    chrome:
-      "120.0":
-        image: selenium/standalone-chrome:120.0
-```
-
-Apply and inspect:
-
-```bash
-kubectl apply -f browserconfig.yaml
-kubectl get browserconfig -n
-kubectl describe browserconfig default-browser-config 
-kubectl get browserconfig default-browser-config -o yaml
-```
-
----
-
-## Reconciliation Model (Summary)
-
-- `BrowserConfig` is loaded and cached by the controller
-- `Browser` reconciliation:
-  - resolves configuration
-  - creates a Pod with the same name
-  - tracks Pod lifecycle
-  - updates `Browser.status`
-- Pods are **non-restarting** and treated as ephemeral
-- Failures are terminal and reflected in `Browser.status`
-
----
-
-## Resource Cleanup
-
-The controller is responsible for ensuring that both the `Browser` CR and its associated Pod are always cleaned up, regardless of the failure mode. Cleanup is enforced through a **finalizer** (`browserpod.selenosis.io/finalizer`) placed on every `Browser` CR.
-
-### Mechanism
-
-Every `Browser` CR receives the finalizer on creation. The controller uses two internal primitives:
-
-- **`deletePod`** — force-deletes the Pod with `gracePeriodSeconds=0`. Ignores `NotFound` (safe to call even if Pod is already gone).
-- **`deleteBrowser`** — removes the finalizer from the `Browser` CR, then calls `Delete` on the CR. After the finalizer is removed Kubernetes completes the deletion immediately.
-
-Most failure paths follow a **two-step process** across two reconcile cycles:
-
-1. **First reconcile** — detects the failure, force-deletes the Pod, sets `Browser.status.phase=Failed` with a descriptive message.
-2. **Second reconcile** — sees `status.phase=Failed`, calls `deletePod` (no-op if already gone) and `deleteBrowser`, which removes the CR.
-
-### Cleanup Scenarios
+When a failure is detected, the controller handles it in a **single reconcile**:
+force-delete the Pod (if any), write `status.phase=Failed` with a message, and call
+`deleteBrowser`. As a safety net, a guard at the top of `Reconcile` re-runs
+`deletePod` + `deleteBrowser` whenever it observes a Browser already in `Failed`, so an
+interrupted cleanup is retried idempotently on the next reconcile.
 
 | Scenario | Pod | Browser CR |
 |---|---|---|
-| No matching `BrowserConfig` | never created | set to `Failed` → next reconcile: **deleted** |
-| Pod creation blocked by `ResourceQuota` (403 Forbidden) | never created | set to `Failed / QuotaExceeded` immediately → next reconcile: **deleted** |
-| `browserPendingTimeout` exceeded (Browser stayed `Pending` without a Pod longer than the timeout) | never created | set to `Failed / PendingTimeoutExceeded` → next reconcile: **deleted** |
-| `podCreationTimeout` exceeded (pod stuck `Pending` > 5 min) — applies to both init containers and regular containers | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
-| `PodPending` + init container `Terminated` with non-zero exit code | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
-| `PodPending` + init container `Waiting` with non-transient reason (`ErrImagePull`, `ImagePullBackOff`, etc.) | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
-| `PodPending` + container `Terminated` | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
-| `PodPending` + container `Waiting` with non-transient reason (`CrashLoopBackOff`, `ErrImagePull`, `ImagePullBackOff`, etc.) | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
-| Pod phase `Failed` | force-deleted (grace=0) | set to `Failed` → next reconcile: **deleted** |
-| `Browser.status.phase=Failed` (failed early exit — any of the above on the next reconcile) | force-deleted (grace=0) | finalizer removed → `Delete` → **deleted** |
-| Critical container (`browser` or `seleniferous`) `Terminated` while pod is `Running` | **deleted** via OwnerReference GC after CR deletion | `deleteBrowser` → finalizer removed → **deleted** |
-| `Browser` CR `DeletionTimestamp` set (external `kubectl delete`) | explicit `Delete` in `handleDeletion`, waits for pod termination | finalizer removed after pod is gone → **deleted** |
-| Pod `DeletionTimestamp` set while CR is alive | already terminating | `deleteBrowser` triggered → **deleted** |
-| Pod stuck `Terminating` beyond `podDeletionTimeout` (5 min) | force-deleted (grace=0, best-effort) | finalizer removed regardless → **deleted** |
+| No matching `BrowserConfig` | never created | `Failed` → **deleted** |
+| Pod creation blocked by `ResourceQuota` (403) | never created | `Failed / QuotaExceeded` → **deleted** |
+| `browser-pending-timeout` exceeded | never created | `Failed / PendingTimeoutExceeded` → **deleted** |
+| `pod-creation-timeout` exceeded (stuck `Pending`) | force-deleted | `Failed` → **deleted** |
+| Init container `Terminated` (non-zero) / non-transient `Waiting` (`ErrImagePull`, …) | force-deleted | `Failed` → **deleted** |
+| Container `Terminated` / non-transient `Waiting` (`CrashLoopBackOff`, …) | force-deleted | `Failed` → **deleted** |
+| Pod phase `Failed` | force-deleted | `Failed` → **deleted** |
+| Critical container (`browser`/`seleniferous`) `Terminated` while `Running` | GC via OwnerReference | `deleteBrowser` → **deleted** |
+| CR `DeletionTimestamp` set (`kubectl delete`) | explicit delete, waits for termination | finalizer removed after pod gone → **deleted** |
+| Pod `DeletionTimestamp` set while CR alive | already terminating | `deleteBrowser` → **deleted** |
+| Pod stuck `Terminating` beyond `pod-deletion-timeout` | force-deleted (best-effort) | finalizer removed → **deleted** |
 
-### `Browser.status.message` on Failure
+Example `status.message` values: `Browser configuration not found`,
+`pods "b1" is forbidden: exceeded quota: ...`, `Browser did not start within 5m0s`,
+`pod container browser terminated: OOMKilled (exit code 137)`,
+`Browser pod container browser failed: CrashLoopBackOff - back-off restarting failed container`.
 
-Every failure path writes a human-readable message to `Browser.status.message` before deletion:
-
-| Cause | Example message |
-|---|---|
-| No `BrowserConfig` | `Browser configuration not found` |
-| Quota exceeded | `pods "b1" is forbidden: exceeded quota: ...` |
-| Pending timeout exceeded | `Browser did not start within 5m0s` |
-| Creation timeout | `pod creation timeout exceeded after 5m0s, container browser: ContainerCreating` |
-| Init container creation timeout | `pod creation timeout exceeded after 5m0s, init container init-setup: PodInitializing` |
-| Init container terminated | `pod init container init-setup terminated: Error (exit code 1)` |
-| Init container not ready | `Browser pod init container init-setup failed: ImagePullBackOff - back-off pulling image` |
-| Container terminated | `pod container browser terminated: OOMKilled (exit code 137)` |
-| Container not ready | `Browser pod container browser failed: CrashLoopBackOff - back-off restarting failed container` |
-| Pod failed | `Browser pod has failed with reason: OOMKilled - container exceeded memory limit` |
-
-This message is available in `Browser.status` until the CR is removed and is propagated as an SSE event by `browser-service`, making it observable to clients before the CR disappears.
+</details>
 
 ---
 
-## Configuration Flags
-
-The controller binary accepts the following flags:
+## Configuration flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `--metrics-addr` | `:8080` | Address the metrics endpoint binds to |
-| `--health-probe-bind-address` | `:8081` | Address the health/readiness probe binds to |
-| `--enable-leader-election` | `false` | Enable leader election for HA deployments |
-| `--browser-pod-creation-timeout` | `5m` | How long the controller waits for a new Pod to leave `Pending` before force-deleting it and marking the `Browser` as `Failed` |
-| `--browser-pod-deletion-timeout` | `5m` | How long the controller waits for a Pod to finish terminating before issuing a force-delete |
-| `--browser-pending-timeout` | `0` (disabled) | How long a `Browser` may stay in `Pending` without an associated Pod before being marked `Failed / PendingTimeoutExceeded`. Useful when Pod creation is blocked by `ResourceQuota` and the backlog needs a deterministic cap. Set to `0` to disable. |
-| `--max-retries` | `3` | Max retries for conflict resolution on Browser patch and status updates |
-| `--max-workers` | `4` | Max concurrent reconcile workers for the Browser controller |
-| `--rate-limiter-base-delay` | `100ms` | Base delay for the exponential failure rate limiter |
-| `--rate-limiter-max-delay` | `30s` | Max delay for the exponential failure rate limiter |
+| `--metrics-addr` | `:8080` | Metrics endpoint bind address. |
+| `--health-probe-bind-address` | `:8081` | Health/readiness probe bind address. |
+| `--enable-leader-election` | `false` | Leader election for HA deployments. |
+| `--browser-pod-creation-timeout` | `5m` | Wait for a new Pod to leave `Pending` before force-delete + `Failed`. |
+| `--browser-pod-deletion-timeout` | `5m` | Wait for a Pod to finish terminating before force-delete. |
+| `--browser-pending-timeout` | `0` (disabled) | Cap on how long a `Browser` may stay `Pending` without a Pod (e.g. blocked by `ResourceQuota`) before `Failed / PendingTimeoutExceeded`. |
+| `--max-retries` | `3` | Max retries for conflict resolution on Browser patch/status updates. |
+| `--max-workers` | `4` | Max concurrent reconcile workers. |
+| `--rate-limiter-base-delay` | `100ms` | Base delay for the exponential failure rate limiter. |
+| `--rate-limiter-max-delay` | `30s` | Max delay for the exponential failure rate limiter. |
+
+<details>
+<summary><b><code>--browser-pending-timeout</code> in detail</b></summary>
+
+When the cluster runs out of Pod quota (or another admission plugin blocks Pod creation),
+the controller keeps retrying and the `Browser` CR stays `Pending` indefinitely. This flag
+gives a deterministic deadline: if a `Browser` has lived without a Pod longer than the
+configured duration, the next reconcile marks it `Failed` (reason
+`PendingTimeoutExceeded`, message `Browser did not start within <timeout>`), and the
+following reconcile removes it.
+
+The timeout is measured against `Browser.metadata.creationTimestamp` (not when the
+controller first saw the CR), so a controller restart does not reset the window. The
+default `0` disables it and preserves retry-forever behavior.
+
+</details>
 
 ---
 
-### `--browser-pending-timeout` in detail
+## Build & generate
 
-When the cluster runs out of Pod quota (or another admission plugin blocks Pod creation), the controller keeps retrying and the `Browser` CR stays in `Pending` indefinitely. `--browser-pending-timeout` gives the controller a deterministic deadline: if a `Browser` CR has lived without a Pod for longer than the configured duration, the next reconcile marks it `Failed` with reason `PendingTimeoutExceeded` and message `Browser did not start within <timeout>`. On the following reconcile the standard failure path removes the CR.
+This project uses `make` to generate code/manifests and build the image.
 
-The timeout is measured against `Browser.metadata.creationTimestamp`, not the time the controller first saw the CR, so a restart of the controller does not reset the window.
+```bash
+make install-tools          # controller-gen, client-gen, lister-gen, informer-gen, deepcopy-gen
+make generate && make manifests   # or: make all
+make docker-build           # or: make deploy (build + push)
+```
 
-The default is `0`, which disables the timeout entirely and preserves the previous behavior of retrying forever.
+<details>
+<summary><b>Makefile build variables</b></summary>
+
+| Variable | Description |
+| --- | --- |
+| `BINARY_NAME` | Name of the produced binary (fixed: `browser-controller`). |
+| `REGISTRY` | Docker registry prefix (default: `localhost:5000`). |
+| `IMAGE_NAME` | Full image name, derived as `$(REGISTRY)/$(BINARY_NAME)`. |
+| `VERSION` | Image version/tag (default: `develop`). |
+| `EXTRA_TAGS` | Additional `-t` tags passed to `docker-push` (default: none). |
+| `PLATFORM` | Target platform (default: `linux/amd64`). |
+| `CONTAINER_TOOL` | Container build tool (default: `docker`). |
+
+`REGISTRY` and `VERSION` are expected to be supplied externally so the same Makefile works
+locally and in CI.
+
+</details>
 
 ---
-
-## Build & Generate
-
-This project uses `make` to generate code, manifests, and build the controller image.
-
-### Install tools
-
-```bash
-make install-tools
-```
-
-### Generate code and manifests
-
-```bash
-make generate
-make manifests
-```
-
-Or run everything:
-
-```bash
-make all
-```
-
-### Build and push image
-
-```bash
-make docker-build
-make docker-push
-```
-
-Or combined:
-
-```bash
-make deploy
-```
-
-### Build variables
-
-The build process is controlled via the following Makefile variables:
-
-| Variable         | Description                                                  |
-|------------------|--------------------------------------------------------------|
-| `BINARY_NAME`    | Name of the produced binary (fixed: `browser-controller`)   |
-| `REGISTRY`       | Docker registry prefix (default: `localhost:5000`)           |
-| `IMAGE_NAME`     | Full image name, derived as `$(REGISTRY)/$(BINARY_NAME)`     |
-| `VERSION`        | Image version/tag (default: `develop`)                       |
-| `EXTRA_TAGS`     | Additional `-t` tags passed to `docker-push` (default: none) |
-| `PLATFORM`       | Target platform (default: `linux/amd64`)                     |
-| `CONTAINER_TOOL` | Container build tool (default: `docker`)                     |
-
-`REGISTRY` and `VERSION` are expected to be provided externally, which allows the same Makefile to be used locally and in CI.
 
 ## Deployment
 
-Helm chart [selenosis-deploy](https://github.com/alcounit/selenosis-deploy)
+Deployed as part of the full stack via the
+[selenosis-deploy](https://github.com/alcounit/selenosis-deploy) Helm chart.
+
+---
+
+## License
+
+[Apache-2.0](./LICENSE)
