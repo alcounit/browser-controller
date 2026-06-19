@@ -37,7 +37,7 @@ It is the only component in the stack that creates or deletes Pods.
 | **[selenosis](https://github.com/alcounit/selenosis)** | Stateless Selenium / Playwright / MCP hub. |
 | **[seleniferous](https://github.com/alcounit/seleniferous)** | Sidecar proxy inside each browser pod. |
 | **[browser-controller](https://github.com/alcounit/browser-controller)** (this repo) | Operator that reconciles `Browser` / `BrowserConfig` CRDs into pods. Owns the CRD types. |
-| **[browser-service](https://github.com/alcounit/browser-service)** | REST + SSE facade over `Browser` resources. |
+| **[browser-service](https://github.com/alcounit/browser-service)** | REST + SSE facade over `Browser` and `BrowserConfig` resources. |
 | **[browser-ui](https://github.com/alcounit/browser-ui)** | Dashboard with live sessions + VNC. |
 | **[selenosis-deploy](https://github.com/alcounit/selenosis-deploy)** | Helm chart that deploys the whole stack. **Start here.** |
 
