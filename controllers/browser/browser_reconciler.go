@@ -135,20 +135,11 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.deleteBrowser(ctx, browser)
 	}
 
-	// Ensure finalizer is set
-	if !controllerutil.ContainsFinalizer(browser, browserPodFinalizer) {
+	needsFinalizer := !controllerutil.ContainsFinalizer(browser, browserPodFinalizer)
+	needsLabels := browser.Labels[browserv1.BrowserLabelKey] != browser.Name
+	if needsFinalizer || needsLabels {
 		if err := r.retryUpdate(ctx, browser, func(b *browserv1.Browser) {
 			controllerutil.AddFinalizer(b, browserPodFinalizer)
-		}); err != nil {
-			log.Error(err, "failed to add finalizer")
-			return ctrl.Result{}, err
-		}
-		log.Info("adding finalizer to Browser")
-	}
-
-	// Ensure label selenosis.io/browser.name exists
-	if browser.Labels[browserv1.BrowserLabelKey] != browser.Name {
-		if err := r.retryUpdate(ctx, browser, func(b *browserv1.Browser) {
 			if b.Labels == nil {
 				b.Labels = map[string]string{}
 			}
@@ -156,10 +147,10 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			b.Labels[browserv1.BrowserNameLabelKey] = b.Spec.BrowserName
 			b.Labels[browserv1.BrowserVersionLabelKey] = b.Spec.BrowserVersion
 		}); err != nil {
-			log.Error(err, "failed to update Browser with name label")
+			log.Error(err, "failed to set finalizer and labels")
 			return ctrl.Result{RequeueAfter: jitter(mediumRetry)}, err
 		}
-		log.Info("labels assigned to Browser")
+		log.Info("finalizer and labels assigned to Browser")
 	}
 
 	// Set Pending status if not set

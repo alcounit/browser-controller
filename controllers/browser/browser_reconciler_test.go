@@ -1756,6 +1756,92 @@ func (s *statusPatchErrorWriter) Patch(ctx context.Context, obj client.Object, p
 	return s.StatusWriter.Patch(ctx, obj, patch, opts...)
 }
 
+type patchCountingClient struct {
+	client.Client
+	metadataPatches int
+}
+
+func (p *patchCountingClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	p.metadataPatches++
+	return p.Client.Patch(ctx, obj, patch, opts...)
+}
+
+func TestReconcileFinalizerAndLabelsSinglePatch(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	cfgStore := store.NewBrowserConfigStore()
+	setStoreConfig(t, cfgStore, "ns/chrome:120", &configv1.BrowserVersionConfigSpec{Image: "img"})
+
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{Name: "b1", Namespace: "ns"},
+		Spec:       browserv1.BrowserSpec{BrowserName: "chrome", BrowserVersion: "120"},
+	}
+	base := newBrowserClient(scheme, brw)
+	cc := &patchCountingClient{Client: base}
+	r := NewBrowserReconciler(cc, cfgStore, scheme, defaultCfg)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKey{Namespace: "ns", Name: "b1"},
+	}); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if cc.metadataPatches != 1 {
+		t.Fatalf("expected exactly 1 metadata patch for finalizer+labels, got %d", cc.metadataPatches)
+	}
+
+	got := &browserv1.Browser{}
+	if err := base.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, got); err != nil {
+		t.Fatalf("get browser: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(got, browserPodFinalizer) {
+		t.Fatalf("expected finalizer to be set")
+	}
+	if got.Labels[browserv1.BrowserLabelKey] != "b1" ||
+		got.Labels[browserv1.BrowserNameLabelKey] != "chrome" ||
+		got.Labels[browserv1.BrowserVersionLabelKey] != "120" {
+		t.Fatalf("expected identity labels to be set, got %v", got.Labels)
+	}
+}
+
+func TestReconcileLabelsOnlyWhenFinalizerPresent(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	cfgStore := store.NewBrowserConfigStore()
+	setStoreConfig(t, cfgStore, "ns/chrome:120", &configv1.BrowserVersionConfigSpec{Image: "img"})
+
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "b1",
+			Namespace:  "ns",
+			Finalizers: []string{browserPodFinalizer},
+		},
+		Spec: browserv1.BrowserSpec{BrowserName: "chrome", BrowserVersion: "120"},
+	}
+	base := newBrowserClient(scheme, brw)
+	cc := &patchCountingClient{Client: base}
+	r := NewBrowserReconciler(cc, cfgStore, scheme, defaultCfg)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKey{Namespace: "ns", Name: "b1"},
+	}); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if cc.metadataPatches != 1 {
+		t.Fatalf("expected exactly 1 metadata patch, got %d", cc.metadataPatches)
+	}
+
+	got := &browserv1.Browser{}
+	if err := base.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, got); err != nil {
+		t.Fatalf("get browser: %v", err)
+	}
+	if len(got.Finalizers) != 1 || got.Finalizers[0] != browserPodFinalizer {
+		t.Fatalf("expected single finalizer, got %v", got.Finalizers)
+	}
+	if got.Labels[browserv1.BrowserLabelKey] != "b1" {
+		t.Fatalf("expected identity label to be set, got %v", got.Labels)
+	}
+}
+
 func TestRetryUpdateGetError(t *testing.T) {
 	scheme := newBrowserScheme(t)
 	base := newBrowserClient(scheme)
