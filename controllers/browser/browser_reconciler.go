@@ -884,17 +884,27 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 	if cfg.Labels != nil {
 		labelCount += len(*cfg.Labels)
 	}
+
 	if labelCount > 0 {
-		pod.Labels = make(map[string]string, labelCount)
+		pod.Labels = make(map[string]string, labelCount+3)
 		for k, v := range browser.Labels {
 			pod.Labels[k] = v
 		}
+
 		if cfg.Labels != nil {
 			for k, v := range *cfg.Labels {
 				pod.Labels[k] = v
 			}
 		}
 	}
+
+	if pod.Labels == nil {
+		pod.Labels = make(map[string]string, 3)
+	}
+
+	pod.Labels[browserv1.BrowserLabelKey] = browser.Name
+	pod.Labels[browserv1.BrowserNameLabelKey] = browser.Spec.BrowserName
+	pod.Labels[browserv1.BrowserVersionLabelKey] = browser.Spec.BrowserVersion
 
 	annotationCount := len(browser.Annotations)
 	if cfg.Annotations != nil {
