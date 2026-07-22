@@ -8,7 +8,6 @@ one Pod per `Browser` — with deterministic, finalizer-backed cleanup.
 [![Go Reference](https://pkg.go.dev/badge/github.com/alcounit/browser-controller.svg)](https://pkg.go.dev/github.com/alcounit/browser-controller)
 [![Docker Pulls](https://img.shields.io/docker/pulls/alcounit/browser-controller.svg)](https://hub.docker.com/r/alcounit/browser-controller)
 [![codecov](https://codecov.io/gh/alcounit/browser-controller/branch/main/graph/badge.svg)](https://codecov.io/gh/alcounit/browser-controller)
-[![Go Report Card](https://goreportcard.com/badge/github.com/alcounit/browser-controller)](https://goreportcard.com/report/github.com/alcounit/browser-controller)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
 ---
