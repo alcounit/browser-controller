@@ -1,10 +1,11 @@
-FROM golang:1.25.0 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25.0 AS builder
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
-RUN go build -trimpath -ldflags="-s -w" -o /out/manager ./cmd/manager
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/manager ./cmd/manager
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
