@@ -123,6 +123,28 @@ Supported fields (all optional): `labels`, `annotations`, `env`, `resources`,
 `hostAliases`, `initContainers`, `sidecars`, `privileged`, `imagePullSecrets`, `dnsConfig`,
 `securityContext`, `command`, `args`, `workingDir`.
 
+> **`sidecars` must include `seleniferous`.** Every browser pod carries the sidecar proxy
+> that terminates all session traffic; the hub proxies to it and never to the browser
+> directly. The container name is **reserved** — the controller recognises `browser` and
+> `seleniferous` by name and treats the termination of either as fatal for the `Browser` —
+> so renaming it is not supported. Declare it once in `spec.template.sidecars` and every
+> browser version inherits it:
+>
+> ```yaml
+> template:
+>   sidecars:
+>   - name: seleniferous
+>     image: alcounit/seleniferous:v2.0.8
+>     env:
+>     - name: POD_IP
+>       valueFrom:
+>         fieldRef:
+>           fieldPath: status.podIP
+> ```
+>
+> Nothing validates this today: a config without the sidecar is accepted and its pods are
+> created, but sessions against them never come up.
+
 **`spec.browsers`** — required map of browser-specific, version-specific config:
 
 ```yaml
@@ -198,6 +220,7 @@ interrupted cleanup is retried idempotently on the next reconcile.
 | Scenario | Pod | Browser CR |
 |---|---|---|
 | No matching `BrowserConfig` | never created | `Failed` → **deleted** |
+| `BrowserConfig` without a `seleniferous` sidecar | created, but unusable | stays `Running`; the session fails on the hub's timeout |
 | Pod creation blocked by `ResourceQuota` (403) | never created | `Failed / QuotaExceeded` → **deleted** |
 | `browser-pending-timeout` exceeded | never created | `Failed / PendingTimeoutExceeded` → **deleted** |
 | `pod-creation-timeout` exceeded (stuck `Pending`) | force-deleted | `Failed` → **deleted** |
