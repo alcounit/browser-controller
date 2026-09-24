@@ -34,8 +34,8 @@ const (
 	mediumRetry = time.Second * 10
 	quickCheck  = time.Second * 15
 
-	browserContainerName = "browser"
-	sidecarContainerName = "seleniferous"
+	BrowserContainerName = "browser"
+	SidecarContainerName = "seleniferous"
 )
 
 func jitter(base time.Duration) time.Duration {
@@ -54,7 +54,6 @@ type ReconcilerConfig struct {
 }
 
 type SelenosisOptions struct {
-	Labels     map[string]string          `json:"labels,omitempty"`
 	Containers map[string]ContainerOption `json:"containers,omitempty"`
 }
 
@@ -525,7 +524,7 @@ func (r *BrowserReconciler) updateBrowserStatus(ctx context.Context, browser *br
 	// Check for critical container termination
 	for _, containerStatus := range pod.Status.ContainerStatuses {
 		// Check if it's a critical container and if it has terminated state
-		if (containerStatus.Name == browserContainerName || containerStatus.Name == sidecarContainerName) &&
+		if (containerStatus.Name == BrowserContainerName || containerStatus.Name == SidecarContainerName) &&
 			containerStatus.State.Terminated != nil {
 
 			if browser.Status.Phase != corev1.PodFailed {
@@ -785,7 +784,7 @@ func buildBrowserPod(browser *browserv1.Browser, cfg *configv1.BrowserVersionCon
 
 	// Base container
 	browserContainer := corev1.Container{
-		Name:  browserContainerName,
+		Name:  BrowserContainerName,
 		Image: cfg.Image,
 	}
 
@@ -993,15 +992,6 @@ func applySelenosisOptions(pod *corev1.Pod, opts *SelenosisOptions) {
 				continue
 			}
 			pod.Spec.Containers[i].Env = mergeEnvVars(pod.Spec.Containers[i].Env, option.Env)
-		}
-	}
-
-	if opts.Labels != nil {
-		if pod.Labels == nil {
-			pod.Labels = map[string]string{}
-		}
-		for k, v := range opts.Labels {
-			pod.Labels[k] = v
 		}
 	}
 }
