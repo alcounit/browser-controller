@@ -253,15 +253,15 @@ func TestParseSelenosisOptionsValidJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if opts == nil || opts.Labels["a"] != "b" {
-		t.Fatalf("expected labels to be parsed")
+	if opts == nil {
+		t.Fatal("expected options to be parsed")
 	}
 	if opts.Containers["browser"].Env["X"] != "1" {
 		t.Fatalf("expected container env to be parsed")
 	}
 }
 
-func TestApplySelenosisOptionsMergesEnvAndLabels(t *testing.T) {
+func TestApplySelenosisOptionsMergesEnv(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels: map[string]string{"existing": "1"},
@@ -280,7 +280,6 @@ func TestApplySelenosisOptionsMergesEnvAndLabels(t *testing.T) {
 		},
 	}
 	opts := &SelenosisOptions{
-		Labels: map[string]string{"from": "options"},
 		Containers: map[string]ContainerOption{
 			"browser": {Env: map[string]string{"B": "override", "C": "new"}},
 		},
@@ -288,8 +287,11 @@ func TestApplySelenosisOptionsMergesEnvAndLabels(t *testing.T) {
 
 	applySelenosisOptions(pod, opts)
 
-	if pod.Labels["existing"] != "1" || pod.Labels["from"] != "options" {
-		t.Fatalf("expected labels to be merged, got %+v", pod.Labels)
+	if pod.Labels["existing"] != "1" {
+		t.Fatalf("expected existing labels to survive, got %+v", pod.Labels)
+	}
+	if _, ok := pod.Labels["from"]; ok {
+		t.Fatalf("options must not set pod labels any more, got %+v", pod.Labels)
 	}
 
 	env := pod.Spec.Containers[0].Env
@@ -554,7 +556,7 @@ func TestUpdateBrowserStatusCriticalContainer(t *testing.T) {
 			Phase: corev1.PodRunning,
 			ContainerStatuses: []corev1.ContainerStatus{
 				{
-					Name: browserContainerName,
+					Name: BrowserContainerName,
 					State: corev1.ContainerState{
 						Terminated: &corev1.ContainerStateTerminated{
 							ExitCode: 1,
@@ -2477,7 +2479,7 @@ func TestUpdateBrowserStatusCriticalSidecar(t *testing.T) {
 		Status: corev1.PodStatus{
 			ContainerStatuses: []corev1.ContainerStatus{
 				{
-					Name: sidecarContainerName,
+					Name: SidecarContainerName,
 					State: corev1.ContainerState{
 						Terminated: &corev1.ContainerStateTerminated{ExitCode: 1},
 					},
@@ -2550,7 +2552,7 @@ func TestUpdateBrowserStatusCriticalAlreadyFailed(t *testing.T) {
 		Status: corev1.PodStatus{
 			ContainerStatuses: []corev1.ContainerStatus{
 				{
-					Name: browserContainerName,
+					Name: BrowserContainerName,
 					State: corev1.ContainerState{
 						Terminated: &corev1.ContainerStateTerminated{ExitCode: 1},
 					},
@@ -3507,14 +3509,14 @@ func TestContainerStateEqualWaiting(t *testing.T) {
 	}
 }
 
-func TestApplySelenosisOptionsNilLabels(t *testing.T) {
+func TestApplySelenosisOptionsNilInputs(t *testing.T) {
 	pod := &corev1.Pod{}
-	opts := &SelenosisOptions{
-		Labels: map[string]string{"env": "test"},
-	}
-	applySelenosisOptions(pod, opts)
-	if pod.Labels["env"] != "test" {
-		t.Fatalf("expected label env=test, got %v", pod.Labels)
+
+	applySelenosisOptions(pod, nil)
+	applySelenosisOptions(nil, &SelenosisOptions{})
+
+	if pod.Labels != nil {
+		t.Fatalf("expected no labels, got %v", pod.Labels)
 	}
 }
 
@@ -3810,6 +3812,132 @@ func TestPodStatusMatchesBrowser(t *testing.T) {
 			got := podStatusMatchesBrowser(tc.pod, tc.browser)
 			if got != tc.want {
 				t.Fatalf("podStatusMatchesBrowser() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildBrowserPodConfigAnnotationsWinOverBrowser(t *testing.T) {
+	configAnnotations := map[string]string{"shared": "from-config", "only-config": "1"}
+	cfg := &configv1.BrowserVersionConfigSpec{
+		Image:       "browser",
+		Annotations: &configAnnotations,
+	}
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "b1",
+			Namespace:   "ns",
+			Annotations: map[string]string{"shared": "from-browser", "only-browser": "1"},
+		},
+	}
+
+	pod := buildBrowserPod(brw, cfg, nil)
+
+	if pod.Annotations["shared"] != "from-config" {
+		t.Fatalf("shared annotation = %q, want from-config", pod.Annotations["shared"])
+	}
+	if pod.Annotations["only-browser"] != "1" {
+		t.Fatalf("browser-only annotation must survive, got %+v", pod.Annotations)
+	}
+	if pod.Annotations["only-config"] != "1" {
+		t.Fatalf("config-only annotation must be applied, got %+v", pod.Annotations)
+	}
+}
+
+func TestBuildBrowserPodConfigLabelsWinOverBrowser(t *testing.T) {
+	configLabels := map[string]string{"shared": "from-config", "only-config": "1"}
+	cfg := &configv1.BrowserVersionConfigSpec{
+		Image:  "browser",
+		Labels: &configLabels,
+	}
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "b1",
+			Namespace: "ns",
+			Labels:    map[string]string{"shared": "from-browser", "only-browser": "1"},
+		},
+	}
+
+	pod := buildBrowserPod(brw, cfg, nil)
+
+	if pod.Labels["shared"] != "from-config" {
+		t.Fatalf("shared label = %q, want from-config", pod.Labels["shared"])
+	}
+	if pod.Labels["only-browser"] != "1" {
+		t.Fatalf("browser-only label must survive, got %+v", pod.Labels)
+	}
+	if pod.Labels["only-config"] != "1" {
+		t.Fatalf("config-only label must be applied, got %+v", pod.Labels)
+	}
+}
+
+func TestBuildBrowserPodOptionsAnnotationNotCopiedToPod(t *testing.T) {
+	cfg := &configv1.BrowserVersionConfigSpec{Image: "browser"}
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "b1",
+			Namespace: "ns",
+			Annotations: map[string]string{
+				browserv1.SelenosisOptionsAnnotationKey: `{"containers":{"browser":{"env":{"X":"1"}}}}`,
+				"startedManually":                       "true",
+			},
+		},
+	}
+
+	pod := buildBrowserPod(brw, cfg, nil)
+
+	if _, ok := pod.Annotations[browserv1.SelenosisOptionsAnnotationKey]; ok {
+		t.Fatalf("%s must not be copied to the pod, got %+v", browserv1.SelenosisOptionsAnnotationKey, pod.Annotations)
+	}
+	if pod.Annotations["startedManually"] != "true" {
+		t.Fatalf("other annotations must be copied, got %+v", pod.Annotations)
+	}
+}
+
+func TestBuildBrowserPodSessionTypeIsAnnotationOnly(t *testing.T) {
+	tests := []struct {
+		name           string
+		labels         map[string]string
+		annotations    map[string]string
+		wantAnnotation string
+		wantLabel      string
+	}{
+		{
+			name:           "annotation is copied to pod annotation only",
+			annotations:    map[string]string{browserv1.SelenosisSessionTypeAnnotationKey: "playwright"},
+			wantAnnotation: "playwright",
+		},
+		{
+			name:      "legacy label is not promoted to pod annotation",
+			labels:    map[string]string{browserv1.SelenosisSessionTypeAnnotationKey: "selenium"},
+			wantLabel: "selenium",
+		},
+		{
+			name: "absent session type sets nothing",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &configv1.BrowserVersionConfigSpec{Image: "browser"}
+			brw := &browserv1.Browser{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "b1",
+					Namespace:   "ns",
+					Labels:      tt.labels,
+					Annotations: tt.annotations,
+				},
+			}
+
+			pod := buildBrowserPod(brw, cfg, nil)
+
+			gotAnnotation, hasAnnotation := pod.Annotations[browserv1.SelenosisSessionTypeAnnotationKey]
+			if gotAnnotation != tt.wantAnnotation || hasAnnotation != (tt.wantAnnotation != "") {
+				t.Fatalf("pod annotation %s = %q (present=%v), want %q", browserv1.SelenosisSessionTypeAnnotationKey, gotAnnotation, hasAnnotation, tt.wantAnnotation)
+			}
+			gotLabel, hasLabel := pod.Labels[browserv1.SelenosisSessionTypeAnnotationKey]
+			if gotLabel != tt.wantLabel || hasLabel != (tt.wantLabel != "") {
+				t.Fatalf("pod label %s = %q (present=%v), want %q", browserv1.SelenosisSessionTypeAnnotationKey, gotLabel, hasLabel, tt.wantLabel)
 			}
 		})
 	}
