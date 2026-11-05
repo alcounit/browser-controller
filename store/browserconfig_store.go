@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	configv1 "github.com/alcounit/browser-controller/apis/browserconfig/v1"
 	"github.com/go-logr/logr"
@@ -19,6 +20,7 @@ type BrowserConfigStore struct {
 	config map[string]*configv1.BrowserVersionConfigSpec // key = namespace/browser:version
 	cache  crcache.Cache
 	log    logr.Logger
+	synced atomic.Bool
 }
 
 func NewBrowserConfigStore() *BrowserConfigStore {
@@ -50,20 +52,33 @@ func (s *BrowserConfigStore) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to get informer for BrowserConfig: %w", err)
 	}
 
-	informer.AddEventHandler(kcache.ResourceEventHandlerFuncs{
+	reg, err := informer.AddEventHandler(kcache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { s.onAddOrUpdate(nil, obj, s.log) },
 		UpdateFunc: func(oldObj, newObj any) { s.onAddOrUpdate(oldObj, newObj, s.log) },
 		DeleteFunc: func(obj any) { s.onDelete(obj, s.log) },
 	})
+	if err != nil {
+		return fmt.Errorf("failed to add event handler for BrowserConfig: %w", err)
+	}
 
 	// Wait until cache is synced
-	if !kcache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
-		return fmt.Errorf("failed to sync BrowserConfig informer cache")
+	if !kcache.WaitForCacheSync(ctx.Done(), reg.HasSynced) {
+		s.log.Info("BrowserConfigStore stopped before sync")
+		return nil
 	}
+	s.synced.Store(true)
 
 	s.log.Info("BrowserConfigStore successfully started and synced")
 	<-ctx.Done()
 	return nil
+}
+
+func (s *BrowserConfigStore) HasSynced() bool {
+	return s.synced.Load()
+}
+
+func (s *BrowserConfigStore) NeedLeaderElection() bool {
+	return false
 }
 
 func (s *BrowserConfigStore) onAddOrUpdate(oldObj, newObj any, log logr.Logger) {

@@ -29,83 +29,91 @@ func newTestScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
+func liveConfig() *configv1.BrowserConfig {
+	return &configv1.BrowserConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"},
+		Spec: configv1.BrowserConfigSpec{
+			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
+				"chrome": {"120": {Image: "img"}},
+			},
+		},
+	}
+}
+
+func deletingConfig() *configv1.BrowserConfig {
+	cfg := liveConfig()
+	now := metav1.NewTime(time.Now().UTC())
+	cfg.Finalizers = []string{browserConfigFinalizer}
+	cfg.DeletionTimestamp = &now
+	return cfg
+}
+
+func reconcileCfg(ctx context.Context, r *BrowserConfigReconciler) (ctrl.Result, error) {
+	return r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
+	})
+}
+
+func assertFinalizerGone(t *testing.T, cl client.Client) {
+	t.Helper()
+	got := &configv1.BrowserConfig{}
+	err := cl.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "cfg"}, got)
+	if apierrors.IsNotFound(err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("failed to get config: %v", err)
+	}
+	if controllerutil.ContainsFinalizer(got, browserConfigFinalizer) {
+		t.Fatalf("expected finalizer to be removed")
+	}
+}
+
 func TestReconcileNotFound(t *testing.T) {
 	scheme := newTestScheme(t)
 	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
 	r := NewBrowserConfigReconciler(cl, scheme)
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: client.ObjectKey{Namespace: "default", Name: "missing"},
-	})
+	res, err := reconcileCfg(context.Background(), r)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	}
+	if !res.IsZero() {
+		t.Fatalf("expected empty result, got %+v", res)
 	}
 }
 
-func TestReconcileAddsFinalizer(t *testing.T) {
+func TestReconcileDoesNotAddFinalizer(t *testing.T) {
 	scheme := newTestScheme(t)
-	cfg := &configv1.BrowserConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cfg",
-			Namespace: "default",
-		},
-		Spec: configv1.BrowserConfigSpec{
-			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
-				"chrome": {"120": {Image: "img"}},
-			},
-		},
-	}
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
-	r := NewBrowserConfigReconciler(cl, scheme)
+	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(liveConfig()).Build()
+	r := NewBrowserConfigReconciler(errorClient{Client: base, patchErr: errors.New("unexpected patch")}, scheme)
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
-	})
+	res, err := reconcileCfg(context.Background(), r)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
+	if !res.IsZero() {
+		t.Fatalf("expected empty result, got %+v", res)
+	}
 
 	got := &configv1.BrowserConfig{}
-	if err := cl.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "cfg"}, got); err != nil {
+	if err := base.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "cfg"}, got); err != nil {
 		t.Fatalf("failed to get config: %v", err)
 	}
-	if !controllerutil.ContainsFinalizer(got, browserConfigFinalizer) {
-		t.Fatalf("expected finalizer to be set")
+	if controllerutil.ContainsFinalizer(got, browserConfigFinalizer) {
+		t.Fatalf("expected finalizer not to be added")
 	}
 }
 
-func TestReconcileRemovesFinalizerOnDelete(t *testing.T) {
+func TestReconcileRemovesLegacyFinalizerOnDelete(t *testing.T) {
 	scheme := newTestScheme(t)
-	now := metav1.NewTime(time.Now().UTC())
-	cfg := &configv1.BrowserConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "cfg",
-			Namespace:         "default",
-			Finalizers:        []string{browserConfigFinalizer},
-			DeletionTimestamp: &now,
-		},
-		Spec: configv1.BrowserConfigSpec{
-			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
-				"chrome": {"120": {Image: "img"}},
-			},
-		},
-	}
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(deletingConfig()).Build()
 	r := NewBrowserConfigReconciler(cl, scheme)
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
-	})
-	if err != nil {
+	if _, err := reconcileCfg(context.Background(), r); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-
-	got := &configv1.BrowserConfig{}
-	if err := cl.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "cfg"}, got); err == nil {
-		if controllerutil.ContainsFinalizer(got, browserConfigFinalizer) {
-			t.Fatalf("expected finalizer to be removed")
-		}
-	}
+	assertFinalizerGone(t, cl)
 }
 
 type errorClient struct {
@@ -144,62 +152,31 @@ func (c *conflictClient) Patch(ctx context.Context, obj client.Object, patch cli
 
 func TestRetryPatchConflictThenSuccess(t *testing.T) {
 	scheme := newTestScheme(t)
-	cfg := &configv1.BrowserConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cfg",
-			Namespace: "default",
-		},
-		Spec: configv1.BrowserConfigSpec{
-			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
-				"chrome": {"120": {Image: "img"}},
-			},
-		},
-	}
-	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
+	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(deletingConfig()).Build()
 	cc := &conflictClient{Client: base, failCount: 1}
 	r := NewBrowserConfigReconciler(cc, scheme)
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
-	})
-	if err != nil {
+	if _, err := reconcileCfg(context.Background(), r); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 	if cc.patchCalls < 2 {
 		t.Fatalf("expected at least 2 patch calls, got %d", cc.patchCalls)
 	}
-
-	got := &configv1.BrowserConfig{}
-	if err := base.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "cfg"}, got); err != nil {
-		t.Fatalf("failed to get config: %v", err)
-	}
-	if !controllerutil.ContainsFinalizer(got, browserConfigFinalizer) {
-		t.Fatalf("expected finalizer to be set after conflict retry")
-	}
+	assertFinalizerGone(t, base)
 }
 
 func TestRetryPatchConflictExhausted(t *testing.T) {
 	scheme := newTestScheme(t)
-	cfg := &configv1.BrowserConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cfg",
-			Namespace: "default",
-		},
-		Spec: configv1.BrowserConfigSpec{
-			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
-				"chrome": {"120": {Image: "img"}},
-			},
-		},
-	}
-	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
+	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(deletingConfig()).Build()
 	cc := &conflictClient{Client: base, failCount: maxRetries + 1}
 	r := NewBrowserConfigReconciler(cc, scheme)
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
-	})
+	res, err := reconcileCfg(context.Background(), r)
 	if err == nil {
 		t.Fatalf("expected error after exhausting retries")
+	}
+	if !res.IsZero() {
+		t.Fatalf("expected empty result with error, got %+v", res)
 	}
 	if cc.patchCalls != maxRetries {
 		t.Fatalf("expected %d patch calls, got %d", maxRetries, cc.patchCalls)
@@ -208,28 +185,14 @@ func TestRetryPatchConflictExhausted(t *testing.T) {
 
 func TestRetryPatchContextCancelled(t *testing.T) {
 	scheme := newTestScheme(t)
-	cfg := &configv1.BrowserConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cfg",
-			Namespace: "default",
-		},
-		Spec: configv1.BrowserConfigSpec{
-			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
-				"chrome": {"120": {Image: "img"}},
-			},
-		},
-	}
-	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
+	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(deletingConfig()).Build()
 	cc := &conflictClient{Client: base, failCount: maxRetries + 1}
 	r := NewBrowserConfigReconciler(cc, scheme)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := r.Reconcile(ctx, ctrl.Request{
-		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
-	})
-	if err == nil {
+	if _, err := reconcileCfg(ctx, r); err == nil {
 		t.Fatalf("expected error from cancelled context")
 	}
 }
@@ -239,84 +202,32 @@ func TestReconcileGetError(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
 	r := NewBrowserConfigReconciler(errorClient{Client: cl, getErr: errors.New("boom")}, scheme)
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
-	})
+	res, err := reconcileCfg(context.Background(), r)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if res.RequeueAfter != mediumRetry {
-		t.Fatalf("expected medium retry, got %v", res.RequeueAfter)
-	}
-}
-
-func TestReconcileAddFinalizerPatchError(t *testing.T) {
-	scheme := newTestScheme(t)
-	cfg := &configv1.BrowserConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cfg",
-			Namespace: "default",
-		},
-		Spec: configv1.BrowserConfigSpec{
-			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
-				"chrome": {"120": {Image: "img"}},
-			},
-		},
-	}
-	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
-	r := NewBrowserConfigReconciler(errorClient{Client: base, patchErr: errors.New("patch")}, scheme)
-
-	res, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
-	})
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	if res.RequeueAfter != shortRetry {
-		t.Fatalf("expected short retry, got %v", res.RequeueAfter)
+	if !res.IsZero() {
+		t.Fatalf("expected empty result with error, got %+v", res)
 	}
 }
 
 func TestReconcileRemoveFinalizerPatchError(t *testing.T) {
 	scheme := newTestScheme(t)
-	now := metav1.NewTime(time.Now().UTC())
-	cfg := &configv1.BrowserConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "cfg",
-			Namespace:         "default",
-			Finalizers:        []string{browserConfigFinalizer},
-			DeletionTimestamp: &now,
-		},
-		Spec: configv1.BrowserConfigSpec{
-			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
-				"chrome": {"120": {Image: "img"}},
-			},
-		},
-	}
-	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
+	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(deletingConfig()).Build()
 	r := NewBrowserConfigReconciler(errorClient{Client: base, patchErr: errors.New("patch")}, scheme)
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: client.ObjectKey{Namespace: "default", Name: "cfg"},
-	})
+	res, err := reconcileCfg(context.Background(), r)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if res.RequeueAfter != shortRetry {
-		t.Fatalf("expected short retry, got %v", res.RequeueAfter)
+	if !res.IsZero() {
+		t.Fatalf("expected empty result with error, got %+v", res)
 	}
 }
 
 func TestRetryPatchContextCancelledDuringBackoff(t *testing.T) {
 	scheme := newTestScheme(t)
-	cfg := &configv1.BrowserConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"},
-		Spec: configv1.BrowserConfigSpec{
-			Browsers: map[string]map[string]*configv1.BrowserVersionConfigSpec{
-				"chrome": {"120": {Image: "img"}},
-			},
-		},
-	}
+	cfg := liveConfig()
 	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cfg).Build()
 	cc := &conflictClient{Client: base, failCount: maxRetries + 1}
 	r := NewBrowserConfigReconciler(cc, scheme)
@@ -331,5 +242,32 @@ func TestRetryPatchContextCancelledDuringBackoff(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
 		t.Fatalf("retryPatch took %v on cancelled context, expected < 200ms", elapsed)
+	}
+}
+
+type secondGetErrorClient struct {
+	client.Client
+	calls int
+}
+
+func (c *secondGetErrorClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	c.calls++
+	if c.calls > 1 {
+		return errors.New("get")
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+func TestRetryPatchGetError(t *testing.T) {
+	scheme := newTestScheme(t)
+	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(deletingConfig()).Build()
+	r := NewBrowserConfigReconciler(&secondGetErrorClient{Client: base}, scheme)
+
+	res, err := reconcileCfg(context.Background(), r)
+	if err == nil {
+		t.Fatalf("expected error from retryPatch get")
+	}
+	if !res.IsZero() {
+		t.Fatalf("expected empty result with error, got %+v", res)
 	}
 }

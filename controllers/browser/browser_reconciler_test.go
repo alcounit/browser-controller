@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -17,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -33,7 +35,7 @@ var defaultCfg = ReconcilerConfig{
 	RateLimiterMaxDelay:  30 * time.Second,
 }
 
-func newBrowserScheme(t *testing.T) *runtime.Scheme {
+func newBrowserScheme(t testing.TB) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
@@ -66,11 +68,27 @@ func setStoreConfig(t *testing.T, cfgStore *store.BrowserConfigStore, key string
 	m[key] = spec
 }
 
+func markStoreSynced(t *testing.T, cfgStore *store.BrowserConfigStore) {
+	t.Helper()
+	v := reflect.ValueOf(cfgStore).Elem().FieldByName("synced")
+	if !v.IsValid() {
+		t.Fatalf("synced field not found")
+	}
+	(*atomic.Bool)(unsafe.Pointer(v.UnsafeAddr())).Store(true)
+}
+
 func assertJitteredRequeue(t *testing.T, got time.Duration, base time.Duration) {
 	t.Helper()
 	half := base / 2
 	if got < half || got >= base {
 		t.Fatalf("expected RequeueAfter in [%v, %v), got %v", half, base, got)
+	}
+}
+
+func assertErrorResult(t *testing.T, res ctrl.Result) {
+	t.Helper()
+	if !res.IsZero() {
+		t.Fatalf("expected empty result with error, got %+v", res)
 	}
 }
 
@@ -309,6 +327,7 @@ func TestApplySelenosisOptionsMergesEnv(t *testing.T) {
 func TestHandleMissingPodConfigNotFound(t *testing.T) {
 	scheme := newBrowserScheme(t)
 	cfgStore := store.NewBrowserConfigStore()
+	markStoreSynced(t, cfgStore)
 	cl := newBrowserClient(scheme)
 	r := NewBrowserReconciler(cl, cfgStore, scheme, defaultCfg)
 
@@ -336,9 +355,35 @@ func TestHandleMissingPodConfigNotFound(t *testing.T) {
 	}
 }
 
+func TestHandleMissingPodConfigNotSyncedRequeues(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{Name: "b1", Namespace: "ns"},
+		Spec:       browserv1.BrowserSpec{BrowserName: "chrome", BrowserVersion: "120"},
+		Status:     browserv1.BrowserStatus{Phase: corev1.PodPending},
+	}
+	cl := newBrowserClient(scheme, brw)
+	r := NewBrowserReconciler(cl, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	res, err := r.handleMissingPod(context.Background(), brw)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	assertJitteredRequeue(t, res.RequeueAfter, storeSyncRetry)
+
+	got := &browserv1.Browser{}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, got); err != nil {
+		t.Fatalf("expected browser to be kept while store is not synced, got err=%v", err)
+	}
+	if got.Status.Phase != corev1.PodPending {
+		t.Fatalf("expected phase Pending, got %s", got.Status.Phase)
+	}
+}
+
 func TestHandleMissingPodStatusUpdateError(t *testing.T) {
 	scheme := newBrowserScheme(t)
 	cfgStore := store.NewBrowserConfigStore()
+	markStoreSynced(t, cfgStore)
 	brw := &browserv1.Browser{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "b1",
@@ -770,7 +815,7 @@ func TestReconcileFailedBrowserPodDeleteError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestReconcileFailedBrowserFinalizerRemoveError(t *testing.T) {
@@ -794,7 +839,7 @@ func TestReconcileFailedBrowserFinalizerRemoveError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestHandleDeletionNoFinalizer(t *testing.T) {
@@ -1063,7 +1108,7 @@ func TestReconcilePodPendingContainerTerminatedPodDeleteError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestReconcilePodPendingWaitingBadReason(t *testing.T) {
@@ -1229,7 +1274,7 @@ func TestReconcilePodPendingCreationTimeoutPodDeleteError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestUpdateBrowserStatusNoChanges(t *testing.T) {
@@ -1935,7 +1980,7 @@ func TestHandleDeletionPodDeleteError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestHandleDeletionDeleteSuccess(t *testing.T) {
@@ -2005,7 +2050,7 @@ func TestHandleDeletionPodGetError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for transient pod get failure")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestHandleDeletionFinalizerRemoveError(t *testing.T) {
@@ -2026,7 +2071,7 @@ func TestHandleDeletionFinalizerRemoveError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestReconcileDeletionTimestamp(t *testing.T) {
@@ -2226,7 +2271,7 @@ func TestReconcileLabelUpdateError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestReconcilePendingStatusUpdateError(t *testing.T) {
@@ -2285,7 +2330,7 @@ func TestReconcilePendingTerminatedStatusUpdateError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestReconcilePendingCreationTimeoutStatusUpdateError(t *testing.T) {
@@ -2331,7 +2376,7 @@ func TestReconcilePendingCreationTimeoutStatusUpdateError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestReconcilePendingWaitingStatusUpdateError(t *testing.T) {
@@ -2373,7 +2418,7 @@ func TestReconcilePendingWaitingStatusUpdateError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestReconcileHandleMissingPodCreateError(t *testing.T) {
@@ -2459,7 +2504,7 @@ func TestReconcilePodPendingWaitingDeleteError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestUpdateBrowserStatusCriticalSidecar(t *testing.T) {
@@ -2607,7 +2652,7 @@ func TestReconcilePodFailedDeleteError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestReconcilePodPendingPodInitializing(t *testing.T) {
@@ -2976,7 +3021,7 @@ func TestHandleMissingPodQuotaExceededStatusUpdateError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	assertJitteredRequeue(t, res.RequeueAfter, mediumRetry)
+	assertErrorResult(t, res)
 }
 
 func TestReconcileQuotaExceededDeletesBrowserOnNextReconcile(t *testing.T) {
@@ -3940,5 +3985,672 @@ func TestBuildBrowserPodSessionTypeIsAnnotationOnly(t *testing.T) {
 				t.Fatalf("pod label %s = %q (present=%v), want %q", browserv1.SelenosisSessionTypeAnnotationKey, gotLabel, hasLabel, tt.wantLabel)
 			}
 		})
+	}
+}
+
+func readyBrowser(status browserv1.BrowserStatus) *browserv1.Browser {
+	return &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "b1",
+			Namespace:  "ns",
+			Finalizers: []string{browserPodFinalizer},
+			Labels: map[string]string{
+				browserv1.BrowserLabelKey:        "b1",
+				browserv1.BrowserNameLabelKey:    "chrome",
+				browserv1.BrowserVersionLabelKey: "120",
+			},
+		},
+		Spec:   browserv1.BrowserSpec{BrowserName: "chrome", BrowserVersion: "120"},
+		Status: status,
+	}
+}
+
+func reconcileB1(t *testing.T, r *BrowserReconciler) (ctrl.Result, error) {
+	t.Helper()
+	return r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKey{Namespace: "ns", Name: "b1"},
+	})
+}
+
+func TestReconcilePodPendingUnschedulableTimeout(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	brw := readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodPending})
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "b1",
+			Namespace:         "ns",
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-defaultCfg.PodCreationTimeout - time.Second).UTC()),
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{{
+				Type:    corev1.PodScheduled,
+				Status:  corev1.ConditionFalse,
+				Reason:  corev1.PodReasonUnschedulable,
+				Message: "0/3 nodes are available",
+			}},
+		},
+	}
+	cl := newBrowserClient(scheme, brw, pod)
+	r := NewBrowserReconciler(cl, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	if _, err := reconcileB1(t, r); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected pod to be deleted, got err=%v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, &browserv1.Browser{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected browser to be deleted, got err=%v", err)
+	}
+}
+
+func TestReconcilePodPendingTimeoutSetsReasonAndMessage(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{Name: "b1", Namespace: "ns"},
+		Spec:       browserv1.BrowserSpec{BrowserName: "chrome", BrowserVersion: "120"},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "b1",
+			Namespace:         "ns",
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-defaultCfg.PodCreationTimeout - time.Second).UTC()),
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{{
+				Type:    corev1.PodScheduled,
+				Status:  corev1.ConditionFalse,
+				Reason:  corev1.PodReasonUnschedulable,
+				Message: "0/3 nodes are available",
+			}},
+		},
+	}
+	cl := newBrowserClient(scheme, brw, pod)
+	r := NewBrowserReconciler(cl, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	if _, err := reconcileB1(t, r); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	got := &browserv1.Browser{}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, got); err != nil {
+		t.Fatalf("get browser: %v", err)
+	}
+	if got.Status.Phase != corev1.PodFailed || got.Status.Reason != "PodCreationTimeout" {
+		t.Fatalf("expected Failed/PodCreationTimeout, got %s/%s", got.Status.Phase, got.Status.Reason)
+	}
+	if !strings.Contains(got.Status.Message, "Unschedulable - 0/3 nodes are available") {
+		t.Fatalf("expected scheduling reason in message, got %q", got.Status.Message)
+	}
+}
+
+func TestReconcilePodPendingInitRunningTimeout(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	brw := readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodPending})
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "b1",
+			Namespace:         "ns",
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-defaultCfg.PodCreationTimeout - time.Second).UTC()),
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			InitContainerStatuses: []corev1.ContainerStatus{{
+				Name:  "init-setup",
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			}},
+		},
+	}
+	cl := newBrowserClient(scheme, brw, pod)
+	r := NewBrowserReconciler(cl, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	if _, err := reconcileB1(t, r); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, &browserv1.Browser{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected browser to be deleted, got err=%v", err)
+	}
+}
+
+func TestReconcilePodPendingRequeuesUntilTimeout(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	brw := readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodPending})
+	age := time.Minute
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "b1",
+			Namespace:         "ns",
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-age).UTC()),
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:  BrowserContainerName,
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
+			}},
+		},
+	}
+	cl := newBrowserClient(scheme, brw, pod)
+	r := NewBrowserReconciler(cl, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	res, err := reconcileB1(t, r)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	remaining := defaultCfg.PodCreationTimeout - age
+	if res.RequeueAfter < remaining-time.Second || res.RequeueAfter > remaining+time.Second {
+		t.Fatalf("expected RequeueAfter about %v, got %v", remaining, res.RequeueAfter)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, &corev1.Pod{}); err != nil {
+		t.Fatalf("expected pod to be kept, got err=%v", err)
+	}
+}
+
+func TestReconcilePodPendingRequeueKeepsStatusError(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	brw := readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodPending})
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "b1",
+			Namespace:         "ns",
+			CreationTimestamp: metav1.NewTime(time.Now().UTC()),
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:  BrowserContainerName,
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
+			}},
+		},
+	}
+	base := newBrowserClient(scheme, brw, pod)
+	cl := patchErrorClient{Client: base, statusPatchErr: apierrors.NewInternalError(errors.New("patch"))}
+	r := NewBrowserReconciler(cl, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	res, err := reconcileB1(t, r)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected no requeue on error, got %v", res.RequeueAfter)
+	}
+}
+
+func TestReconcilePodPendingZeroCreationTimestampNoRequeue(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	brw := readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodPending})
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "b1", Namespace: "ns"},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending},
+	}
+	cl := newBrowserClient(scheme, brw, pod)
+	r := NewBrowserReconciler(cl, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	res, err := reconcileB1(t, r)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !res.IsZero() {
+		t.Fatalf("expected empty result, got %+v", res)
+	}
+}
+
+func TestPendingReason(t *testing.T) {
+	waiting := func(name, reason string) corev1.ContainerStatus {
+		return corev1.ContainerStatus{
+			Name:  name,
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: reason}},
+		}
+	}
+	tests := []struct {
+		name   string
+		status corev1.PodStatus
+		want   string
+	}{
+		{
+			name: "unschedulable",
+			status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{
+					{Type: corev1.PodReady, Status: corev1.ConditionFalse},
+					{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable", Message: "no nodes"},
+				},
+				ContainerStatuses: []corev1.ContainerStatus{waiting("browser", "ContainerCreating")},
+			},
+			want: "Unschedulable - no nodes",
+		},
+		{
+			name: "scheduled falls through to init container",
+			status: corev1.PodStatus{
+				Conditions:            []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionTrue}},
+				InitContainerStatuses: []corev1.ContainerStatus{{Name: "done"}, waiting("init-setup", "PodInitializing")},
+				ContainerStatuses:     []corev1.ContainerStatus{waiting("browser", "PodInitializing")},
+			},
+			want: "init container init-setup: PodInitializing",
+		},
+		{
+			name: "container waiting",
+			status: corev1.PodStatus{
+				ContainerStatuses: []corev1.ContainerStatus{{Name: "seleniferous"}, waiting("browser", "ContainerCreating")},
+			},
+			want: "container browser: ContainerCreating",
+		},
+		{
+			name:   "nothing known",
+			status: corev1.PodStatus{},
+			want:   "pod is pending",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pendingReason(&corev1.Pod{Status: tt.status}); got != tt.want {
+				t.Fatalf("pendingReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHandleMissingPodInvalidPodSpecFailsBrowser(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "invalid",
+			err:  apierrors.NewInvalid(schema.GroupKind{Kind: "Pod"}, "b1", nil),
+		},
+		{
+			name: "bad request",
+			err:  apierrors.NewBadRequest("bad pod"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := newBrowserScheme(t)
+			cfgStore := store.NewBrowserConfigStore()
+			setStoreConfig(t, cfgStore, "ns/chrome:120", &configv1.BrowserVersionConfigSpec{Image: "img"})
+			brw := readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodPending})
+			base := newBrowserClient(scheme, brw)
+			cl := errorClient{Client: base, createErr: tt.err}
+			r := NewBrowserReconciler(cl, cfgStore, scheme, defaultCfg)
+
+			res, err := r.handleMissingPod(context.Background(), brw)
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if !res.IsZero() {
+				t.Fatalf("expected no requeue, got %+v", res)
+			}
+			if err := base.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, &browserv1.Browser{}); !apierrors.IsNotFound(err) {
+				t.Fatalf("expected browser to be deleted, got err=%v", err)
+			}
+		})
+	}
+}
+
+func TestHandleMissingPodInvalidPodSpecSetsReason(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	cfgStore := store.NewBrowserConfigStore()
+	setStoreConfig(t, cfgStore, "ns/chrome:120", &configv1.BrowserVersionConfigSpec{Image: "img"})
+	brw := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{Name: "b1", Namespace: "ns", Finalizers: []string{"other/finalizer"}},
+		Spec:       browserv1.BrowserSpec{BrowserName: "chrome", BrowserVersion: "120"},
+		Status:     browserv1.BrowserStatus{Phase: corev1.PodPending},
+	}
+	base := newBrowserClient(scheme, brw)
+	cl := errorClient{Client: base, createErr: apierrors.NewInvalid(schema.GroupKind{Kind: "Pod"}, "b1", nil)}
+	r := NewBrowserReconciler(cl, cfgStore, scheme, defaultCfg)
+
+	if _, err := r.handleMissingPod(context.Background(), brw); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	got := &browserv1.Browser{}
+	if err := base.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, got); err != nil {
+		t.Fatalf("get browser: %v", err)
+	}
+	if got.Status.Phase != corev1.PodFailed || got.Status.Reason != "InvalidPodSpec" {
+		t.Fatalf("expected Failed/InvalidPodSpec, got %s/%s", got.Status.Phase, got.Status.Reason)
+	}
+}
+
+func TestHandleMissingPodInvalidPodSpecStatusUpdateError(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	cfgStore := store.NewBrowserConfigStore()
+	setStoreConfig(t, cfgStore, "ns/chrome:120", &configv1.BrowserVersionConfigSpec{Image: "img"})
+	brw := readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodPending})
+	base := newBrowserClient(scheme, brw)
+	cl := quotaCreatePatchErrorClient{
+		Client:         base,
+		quotaCreateErr: apierrors.NewInvalid(schema.GroupKind{Kind: "Pod"}, "b1", nil),
+		statusPatchErr: apierrors.NewInternalError(errors.New("patch")),
+	}
+	r := NewBrowserReconciler(cl, cfgStore, scheme, defaultCfg)
+
+	res, err := r.handleMissingPod(context.Background(), brw)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	assertErrorResult(t, res)
+}
+
+func TestReconcilePodLost(t *testing.T) {
+	start := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
+	tests := []struct {
+		name   string
+		status browserv1.BrowserStatus
+	}{
+		{
+			name:   "running with ip",
+			status: browserv1.BrowserStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1", StartTime: &start},
+		},
+		{
+			name:   "pending with ip",
+			status: browserv1.BrowserStatus{Phase: corev1.PodPending, PodIP: "10.0.0.1"},
+		},
+		{
+			name:   "pending with start time only",
+			status: browserv1.BrowserStatus{Phase: corev1.PodPending, StartTime: &start},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := newBrowserScheme(t)
+			cfgStore := store.NewBrowserConfigStore()
+			setStoreConfig(t, cfgStore, "ns/chrome:120", &configv1.BrowserVersionConfigSpec{Image: "img"})
+			cl := newBrowserClient(scheme, readyBrowser(tt.status))
+			r := NewBrowserReconciler(cl, cfgStore, scheme, defaultCfg)
+
+			res, err := reconcileB1(t, r)
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if !res.IsZero() {
+				t.Fatalf("expected no requeue, got %+v", res)
+			}
+			if err := cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+				t.Fatalf("expected no pod to be created, got err=%v", err)
+			}
+			if err := cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, &browserv1.Browser{}); !apierrors.IsNotFound(err) {
+				t.Fatalf("expected browser to be deleted, got err=%v", err)
+			}
+		})
+	}
+}
+
+func TestReconcilePodLostSetsReason(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	brw := readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1"})
+	brw.Finalizers = append(brw.Finalizers, "other/finalizer")
+	cl := newBrowserClient(scheme, brw)
+	r := NewBrowserReconciler(cl, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	if _, err := reconcileB1(t, r); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	got := &browserv1.Browser{}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, got); err != nil {
+		t.Fatalf("get browser: %v", err)
+	}
+	if got.Status.Phase != corev1.PodFailed || got.Status.Reason != "PodLost" {
+		t.Fatalf("expected Failed/PodLost, got %s/%s", got.Status.Phase, got.Status.Reason)
+	}
+}
+
+func TestReconcilePodLostStatusUpdateError(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	base := newBrowserClient(scheme, readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1"}))
+	cl := patchErrorClient{Client: base, statusPatchErr: apierrors.NewInternalError(errors.New("patch"))}
+	r := NewBrowserReconciler(cl, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	res, err := reconcileB1(t, r)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	assertErrorResult(t, res)
+	if err := base.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, &browserv1.Browser{}); err != nil {
+		t.Fatalf("expected browser to be kept, got err=%v", err)
+	}
+}
+
+func TestReconcilePodRunningMirrorsStatusWithoutRequeue(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	start := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "b1",
+			Namespace:         "ns",
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-defaultCfg.PodCreationTimeout - time.Second).UTC()),
+		},
+		Status: corev1.PodStatus{
+			Phase:     corev1.PodRunning,
+			PodIP:     "10.0.0.1",
+			StartTime: &start,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:  BrowserContainerName,
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: start}},
+			}},
+		},
+	}
+	cl := newBrowserClient(scheme, readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodPending}), pod)
+	r := NewBrowserReconciler(cl, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+	res, err := reconcileB1(t, r)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !res.IsZero() {
+		t.Fatalf("expected empty result, got %+v", res)
+	}
+	got := &browserv1.Browser{}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, got); err != nil {
+		t.Fatalf("get browser: %v", err)
+	}
+	if got.Status.Phase != corev1.PodRunning || got.Status.PodIP != "10.0.0.1" {
+		t.Fatalf("expected Running/10.0.0.1, got %s/%s", got.Status.Phase, got.Status.PodIP)
+	}
+}
+
+func TestReconcilePodNotFoundWithoutIPCreatesPod(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	cfgStore := store.NewBrowserConfigStore()
+	setStoreConfig(t, cfgStore, "ns/chrome:120", &configv1.BrowserVersionConfigSpec{Image: "img"})
+	cl := newBrowserClient(scheme, readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodPending}))
+	r := NewBrowserReconciler(cl, cfgStore, scheme, defaultCfg)
+
+	if _, err := reconcileB1(t, r); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "b1", Namespace: "ns"}, &corev1.Pod{}); err != nil {
+		t.Fatalf("expected pod to be created, got err=%v", err)
+	}
+}
+
+func fatalPendingPods() map[string]*corev1.Pod {
+	meta := func() metav1.ObjectMeta {
+		return metav1.ObjectMeta{Name: "b1", Namespace: "ns", CreationTimestamp: metav1.NewTime(time.Now().UTC())}
+	}
+	waiting := func(reason string) corev1.ContainerState {
+		return corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: reason}}
+	}
+	terminated := corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1}}
+	timedOut := meta()
+	timedOut.CreationTimestamp = metav1.NewTime(time.Now().Add(-defaultCfg.PodCreationTimeout - time.Second).UTC())
+
+	return map[string]*corev1.Pod{
+		"pod failed": {ObjectMeta: meta(), Status: corev1.PodStatus{Phase: corev1.PodFailed, Reason: "Evicted"}},
+		"init terminated": {ObjectMeta: meta(), Status: corev1.PodStatus{
+			Phase:                 corev1.PodPending,
+			InitContainerStatuses: []corev1.ContainerStatus{{Name: "init", State: terminated}},
+		}},
+		"init waiting": {ObjectMeta: meta(), Status: corev1.PodStatus{
+			Phase:                 corev1.PodPending,
+			InitContainerStatuses: []corev1.ContainerStatus{{Name: "init", State: waiting("ErrImagePull")}},
+		}},
+		"container terminated": {ObjectMeta: meta(), Status: corev1.PodStatus{
+			Phase:             corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{{Name: BrowserContainerName, State: terminated}},
+		}},
+		"container waiting": {ObjectMeta: meta(), Status: corev1.PodStatus{
+			Phase:             corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{{Name: BrowserContainerName, State: waiting("CrashLoopBackOff")}},
+		}},
+		"creation timeout": {ObjectMeta: timedOut, Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{{
+				Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable", Message: "0/3 nodes available",
+			}},
+		}},
+	}
+}
+
+func TestReconcileFatalPodStatusPatchErrorKeepsPod(t *testing.T) {
+	for name, pod := range fatalPendingPods() {
+		t.Run(name, func(t *testing.T) {
+			scheme := newBrowserScheme(t)
+			base := newBrowserClient(scheme, readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodPending}), pod)
+			cl := patchErrorClient{Client: base, statusPatchErr: apierrors.NewInternalError(errors.New("patch"))}
+			r := NewBrowserReconciler(cl, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+			res, err := reconcileB1(t, r)
+			if err == nil {
+				t.Fatalf("expected error")
+			}
+			assertErrorResult(t, res)
+
+			got := &corev1.Pod{}
+			if err := base.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "b1"}, got); err != nil {
+				t.Fatalf("expected pod to be kept until Failed is persisted, got %v", err)
+			}
+			brw := &browserv1.Browser{}
+			if err := base.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "b1"}, brw); err != nil {
+				t.Fatalf("expected Browser to be kept, got %v", err)
+			}
+			if brw.Status.Phase != corev1.PodPending {
+				t.Fatalf("expected phase Pending, got %q", brw.Status.Phase)
+			}
+		})
+	}
+}
+
+func TestReconcileFatalPodDeleteErrorPersistsFailed(t *testing.T) {
+	for name, pod := range fatalPendingPods() {
+		t.Run(name, func(t *testing.T) {
+			scheme := newBrowserScheme(t)
+			base := newBrowserClient(scheme, readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodPending}), pod)
+			cl := errorClient{Client: base, deleteErr: apierrors.NewInternalError(errors.New("delete"))}
+			r := NewBrowserReconciler(cl, store.NewBrowserConfigStore(), scheme, defaultCfg)
+
+			res, err := reconcileB1(t, r)
+			if err == nil {
+				t.Fatalf("expected error")
+			}
+			assertErrorResult(t, res)
+
+			brw := &browserv1.Browser{}
+			if err := base.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "b1"}, brw); err != nil {
+				t.Fatalf("expected Browser to exist, got %v", err)
+			}
+			if brw.Status.Phase != corev1.PodFailed {
+				t.Fatalf("expected phase Failed before pod deletion, got %q", brw.Status.Phase)
+			}
+			if brw.Status.Message == "" {
+				t.Fatalf("expected failure message to be persisted")
+			}
+		})
+	}
+}
+
+func TestReconcileCreationTimeoutStatusErrorDoesNotRecreatePod(t *testing.T) {
+	scheme := newBrowserScheme(t)
+	cfgStore := store.NewBrowserConfigStore()
+	setStoreConfig(t, cfgStore, "ns/chrome:120", &configv1.BrowserVersionConfigSpec{Image: "img"})
+	pod := fatalPendingPods()["creation timeout"]
+	originalUID := types.UID("original")
+	pod.UID = originalUID
+	base := newBrowserClient(scheme, readyBrowser(browserv1.BrowserStatus{Phase: corev1.PodPending}), pod)
+	key := client.ObjectKey{Namespace: "ns", Name: "b1"}
+
+	failingStatus := NewBrowserReconciler(
+		patchErrorClient{Client: base, statusPatchErr: apierrors.NewInternalError(errors.New("patch"))},
+		cfgStore, scheme, defaultCfg)
+	if _, err := reconcileB1(t, failingStatus); err == nil {
+		t.Fatalf("expected status patch error")
+	}
+
+	failingDelete := NewBrowserReconciler(
+		errorClient{Client: base, deleteErr: apierrors.NewInternalError(errors.New("delete"))},
+		cfgStore, scheme, defaultCfg)
+	if _, err := reconcileB1(t, failingDelete); err == nil {
+		t.Fatalf("expected pod delete error")
+	}
+	got := &corev1.Pod{}
+	if err := base.Get(context.Background(), key, got); err != nil || got.UID != originalUID {
+		t.Fatalf("expected original pod to be kept, got uid=%q err=%v", got.UID, err)
+	}
+	brw := &browserv1.Browser{}
+	if err := base.Get(context.Background(), key, brw); err != nil {
+		t.Fatalf("expected Browser to exist, got %v", err)
+	}
+	if brw.Status.Phase != corev1.PodFailed || brw.Status.Reason != "PodCreationTimeout" {
+		t.Fatalf("expected Failed/PodCreationTimeout, got %q/%q", brw.Status.Phase, brw.Status.Reason)
+	}
+
+	r := NewBrowserReconciler(base, cfgStore, scheme, defaultCfg)
+	if _, err := reconcileB1(t, r); err != nil {
+		t.Fatalf("expected cleanup without error, got %v", err)
+	}
+	if err := base.Get(context.Background(), key, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected pod to be deleted and not recreated, got %v", err)
+	}
+	if err := base.Get(context.Background(), key, &browserv1.Browser{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected Browser to be deleted, got %v", err)
+	}
+}
+
+func TestReconcilerConfigValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*ReconcilerConfig)
+		wantErr string
+	}{
+		{name: "defaults valid", mutate: func(*ReconcilerConfig) {}},
+		{name: "zero optional timeouts valid", mutate: func(c *ReconcilerConfig) { c.PodDeletionTimeout, c.PendingTimeout = 0, 0 }},
+		{name: "equal rate limiter delays valid", mutate: func(c *ReconcilerConfig) { c.RateLimiterMaxDelay = c.RateLimiterBaseDelay }},
+		{name: "zero pod creation timeout", mutate: func(c *ReconcilerConfig) { c.PodCreationTimeout = 0 }, wantErr: "pod creation timeout"},
+		{name: "negative pod creation timeout", mutate: func(c *ReconcilerConfig) { c.PodCreationTimeout = -time.Second }, wantErr: "pod creation timeout"},
+		{name: "negative pod deletion timeout", mutate: func(c *ReconcilerConfig) { c.PodDeletionTimeout = -time.Second }, wantErr: "pod deletion timeout"},
+		{name: "negative pending timeout", mutate: func(c *ReconcilerConfig) { c.PendingTimeout = -time.Second }, wantErr: "pending timeout"},
+		{name: "zero max retries", mutate: func(c *ReconcilerConfig) { c.MaxRetries = 0 }, wantErr: "max retries"},
+		{name: "zero max workers", mutate: func(c *ReconcilerConfig) { c.MaxWorkers = 0 }, wantErr: "max workers"},
+		{name: "zero base delay", mutate: func(c *ReconcilerConfig) { c.RateLimiterBaseDelay = 0 }, wantErr: "base delay must be greater than 0"},
+		{name: "max delay below base", mutate: func(c *ReconcilerConfig) { c.RateLimiterMaxDelay = c.RateLimiterBaseDelay - 1 }, wantErr: "must not be less than base delay"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := defaultCfg
+			tt.mutate(&cfg)
+			err := cfg.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestReconcilerConfigValidateReportsAllErrors(t *testing.T) {
+	err := ReconcilerConfig{}.Validate()
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	for _, want := range []string{"pod creation timeout", "max retries", "max workers", "base delay"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected %q in %v", want, err)
+		}
 	}
 }
