@@ -19,8 +19,6 @@ import (
 const (
 	browserConfigFinalizer = "browserconfig.selenosis.io/finalizer"
 	maxRetries             = 3
-	shortRetry             = time.Second * 5
-	mediumRetry            = time.Second * 10
 )
 
 // +kubebuilder:rbac:groups=browserconfig.selenosis.io,resources=browserconfigs,verbs=get;list;watch;create;update;patch;delete
@@ -54,7 +52,7 @@ func (r *BrowserConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "failed to get BrowserConfig object")
-		return ctrl.Result{RequeueAfter: mediumRetry}, err
+		return ctrl.Result{}, err
 	}
 
 	if !browserConfig.DeletionTimestamp.IsZero() {
@@ -63,19 +61,10 @@ func (r *BrowserConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 				controllerutil.RemoveFinalizer(bc, browserConfigFinalizer)
 			}); err != nil {
 				log.Error(err, "failed to remove finalizer")
-				return ctrl.Result{RequeueAfter: shortRetry}, err
+				return ctrl.Result{}, err
 			}
 		}
 		return ctrl.Result{}, nil
-	}
-
-	if !controllerutil.ContainsFinalizer(browserConfig, browserConfigFinalizer) {
-		if err := r.retryPatch(ctx, browserConfig, func(bc *configv1.BrowserConfig) {
-			controllerutil.AddFinalizer(bc, browserConfigFinalizer)
-		}); err != nil {
-			log.Error(err, "failed to add finalizer")
-			return ctrl.Result{RequeueAfter: shortRetry}, err
-		}
 	}
 
 	return ctrl.Result{}, nil

@@ -359,7 +359,7 @@ func TestBrowserConfigStoreStartGetInformerError(t *testing.T) {
 	}
 }
 
-func TestBrowserConfigStoreStartWaitForCacheSyncFails(t *testing.T) {
+func TestBrowserConfigStoreStartStoppedBeforeSync(t *testing.T) {
 	store := NewBrowserConfigStore()
 	fi := &fakeInformer{synced: false}
 	fc := &fakeCache{informer: fi}
@@ -368,8 +368,49 @@ func TestBrowserConfigStoreStartWaitForCacheSyncFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
+	if err := store.Start(ctx); err != nil {
+		t.Fatalf("expected nil on shutdown before sync, got %v", err)
+	}
+	if store.HasSynced() {
+		t.Fatalf("expected store not to be synced")
+	}
+}
+
+func TestBrowserConfigStoreStartAddEventHandlerError(t *testing.T) {
+	store := NewBrowserConfigStore()
+	fi := &fakeInformer{synced: true, addHandlerErr: errors.New("boom")}
+	store.WithCache(&fakeCache{informer: fi}, logr.Discard())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	if err := store.Start(ctx); err == nil {
-		t.Fatalf("expected error when cache sync fails")
+		t.Fatalf("expected error from AddEventHandler")
+	}
+	if store.HasSynced() {
+		t.Fatalf("expected store not to be synced")
+	}
+}
+
+func TestBrowserConfigStoreStartWaitsForHandlerRegistration(t *testing.T) {
+	store := NewBrowserConfigStore()
+	fi := &fakeInformer{synced: true, handlerPending: true}
+	store.WithCache(&fakeCache{informer: fi}, logr.Discard())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	if err := store.Start(ctx); err != nil {
+		t.Fatalf("expected nil on shutdown before sync, got %v", err)
+	}
+	if store.HasSynced() {
+		t.Fatalf("expected store not to be synced")
+	}
+}
+
+func TestBrowserConfigStoreNeedLeaderElection(t *testing.T) {
+	if NewBrowserConfigStore().NeedLeaderElection() {
+		t.Fatalf("expected store to run on every replica")
 	}
 }
 
@@ -399,6 +440,14 @@ func TestBrowserConfigStoreStartSuccess(t *testing.T) {
 	case <-handlerCh:
 	case <-time.After(1 * time.Second):
 		t.Fatalf("expected handler to be registered")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for !store.HasSynced() {
+		if time.Now().After(deadline) {
+			t.Fatalf("expected store to be synced")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	if fi.handler != nil {
@@ -466,6 +515,8 @@ func (f *fakeCache) IndexField(ctx context.Context, obj client.Object, field str
 
 type fakeInformer struct {
 	synced           bool
+	handlerPending   bool
+	addHandlerErr    error
 	addHandlerCalled bool
 	syncedCalled     chan struct{}
 	handlerSet       chan struct{}
@@ -474,11 +525,14 @@ type fakeInformer struct {
 
 func (f *fakeInformer) AddEventHandler(handler cache.ResourceEventHandler) (cache.ResourceEventHandlerRegistration, error) {
 	f.addHandlerCalled = true
+	if f.addHandlerErr != nil {
+		return nil, f.addHandlerErr
+	}
 	f.handler = handler
 	if f.handlerSet != nil {
 		close(f.handlerSet)
 	}
-	return fakeHandlerReg{synced: f.synced}, nil
+	return fakeHandlerReg{synced: f.synced && !f.handlerPending, syncedCalled: f.syncedCalled}, nil
 }
 
 func (f *fakeInformer) AddEventHandlerWithResyncPeriod(handler cache.ResourceEventHandler, resyncPeriod time.Duration) (cache.ResourceEventHandlerRegistration, error) {
@@ -494,13 +548,6 @@ func (f *fakeInformer) AddIndexers(cache.Indexers) error {
 }
 
 func (f *fakeInformer) HasSynced() bool {
-	if f.syncedCalled != nil {
-		select {
-		case <-f.syncedCalled:
-		default:
-			close(f.syncedCalled)
-		}
-	}
 	return f.synced
 }
 
@@ -509,9 +556,17 @@ func (f *fakeInformer) IsStopped() bool {
 }
 
 type fakeHandlerReg struct {
-	synced bool
+	synced       bool
+	syncedCalled chan struct{}
 }
 
 func (r fakeHandlerReg) HasSynced() bool {
+	if r.syncedCalled != nil {
+		select {
+		case <-r.syncedCalled:
+		default:
+			close(r.syncedCalled)
+		}
+	}
 	return r.synced
 }

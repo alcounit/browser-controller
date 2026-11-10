@@ -2,6 +2,8 @@ package main
 
 import (
 	"flag"
+	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -62,6 +64,11 @@ func main() {
 	ctrl.SetLogger(logr.New(&zerologSink{zl: zlogger}))
 	log := ctrl.Log
 
+	if err := reconcilerCfg.Validate(); err != nil {
+		log.Error(err, "invalid browser controller flags")
+		os.Exit(1)
+	}
+
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
 		log.Error(err, "unable to get kubeconfig")
@@ -111,6 +118,15 @@ func main() {
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		log.Error(err, "unable to set up ready check")
+		os.Exit(1)
+	}
+	if err := mgr.AddReadyzCheck("store-synced", func(_ *http.Request) error {
+		if !browserCfgStore.HasSynced() {
+			return fmt.Errorf("browser config store not synced")
+		}
+		return nil
+	}); err != nil {
+		log.Error(err, "unable to set up store ready check")
 		os.Exit(1)
 	}
 
